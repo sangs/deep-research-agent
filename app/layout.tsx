@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { NavLinks } from "@/components/nav-links";
+import { SectionProvider } from "@/context/section-context";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -27,7 +29,14 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <SectionProvider>
+          <nav className="border-b px-4 py-2.5 flex items-center gap-4 text-sm">
+            <span className="text-base font-bold tracking-tight text-foreground">AI Research</span>
+            <span className="h-4 w-px bg-border flex-shrink-0" />
+            <NavLinks />
+          </nav>
+          {children}
+        </SectionProvider>
       </body>
     </html>
   );
