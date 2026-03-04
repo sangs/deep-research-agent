@@ -1,0 +1,27 @@
+{
+  "news_sites": [
+    "techcrunch.com",
+    "venturebeat.com",
+    "the-decoder.com",
+    "theverge.com",
+    "wired.com",
+    "infoq.com",
+    "thoughtworks.com",
+    "kdnuggets.com",
+    "towardsdatascience.com",
+    "news.ycombinator.com",
+    "unite.ai"
+  ],
+  "research_sites": [
+    "openai.com",
+    "anthropic.com",
+    "deepmind.google",
+    "ai.meta.com",
+    "mistral.ai",
+    "huggingface.co",
+    "paperswithcode.com",
+    "developers.googleblog.com",
+    "research.microsoft.com"
+  ],
+  "newsletters": []
+}

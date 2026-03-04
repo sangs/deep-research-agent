@@ -21,11 +21,13 @@ export const webSearchTool = tool({
       numResults,
       type: 'auto',
       text: { maxCharacters: 3000 },
+      highlights: { numSentences: 2, highlightsPerUrl: 1 },
     });
     return response.results.map((r) => ({
       title: r.title ?? 'Untitled',
       url: r.url,
       text: r.text ?? '',
+      highlights: r.highlights ?? [],
       publishedDate: r.publishedDate ?? null,
       score: r.score ?? null,
     }));

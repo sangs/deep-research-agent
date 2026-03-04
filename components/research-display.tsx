@@ -1,4 +1,10 @@
+'use client';
+
+import { useState } from 'react';
 import { UIMessage } from 'ai';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
@@ -8,8 +14,78 @@ interface SourceResult {
   title: string;
   url: string;
   text: string;
+  highlights: string[];
   publishedDate: string | null;
   score: number | null;
+}
+
+/** Split markdown text into a Key Takeaways block and the body that follows. */
+function extractSummary(text: string): { takeawaysContent: string; body: string } | null {
+  const lines = text.split('\n');
+  const idx = lines.findIndex(l => l.match(/^#{1,2}\s*Key Takeaways/i));
+  if (idx === -1) return null;
+
+  // Find where the next ## / # section begins after the heading
+  let splitIdx = lines.length;
+  for (let i = idx + 1; i < lines.length; i++) {
+    if (lines[i].match(/^#{1,2}\s+\S/)) { splitIdx = i; break; }
+  }
+
+  // Strip the "## Key Takeaways" heading line — the card header already labels it
+  const takeawaysContent = lines.slice(idx + 1, splitIdx).join('\n').trim();
+  // Any preamble text before the heading + remaining sections after takeaways
+  const preamble = lines.slice(0, idx).join('\n').trim();
+  const rest = lines.slice(splitIdx).join('\n').trim();
+  const body = [preamble, rest].filter(Boolean).join('\n\n').trim();
+
+  return takeawaysContent ? { takeawaysContent, body } : null;
+}
+
+function ResearchTextPart({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(true);
+  const split = extractSummary(text);
+
+  // No structured Key Takeaways section — render as-is (backward compatible)
+  if (!split || !split.body) {
+    return (
+      <div className="prose prose-sm dark:prose-invert max-w-none">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Key Takeaways summary card */}
+      <div className="rounded-lg border border-border bg-muted/40 px-4 py-3">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            ✨ Key Takeaways
+          </span>
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {expanded ? (
+              <><ChevronUp className="h-3.5 w-3.5" />Collapse</>
+            ) : (
+              <><ChevronDown className="h-3.5 w-3.5" />Read full report</>
+            )}
+          </button>
+        </div>
+        <div className="prose prose-sm dark:prose-invert max-w-none">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{split.takeawaysContent}</ReactMarkdown>
+        </div>
+      </div>
+
+      {/* Full report — toggled */}
+      {expanded && (
+        <div className="prose prose-sm dark:prose-invert max-w-none">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{split.body}</ReactMarkdown>
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface ResearchDisplayProps {
@@ -77,44 +153,7 @@ export function ResearchDisplay({ messages, isLoading, error }: ResearchDisplayP
           {assistant.parts.map((part, partIdx) => {
             if (part.type === 'text') {
               return (
-                <div key={partIdx} className="prose prose-sm dark:prose-invert max-w-none">
-                  {part.text.split('\n').map((line, lineIdx) => {
-                    if (line.startsWith('## ')) {
-                      return (
-                        <h2 key={lineIdx} className="text-lg font-semibold mt-4 mb-2">
-                          {line.slice(3)}
-                        </h2>
-                      );
-                    }
-                    if (line.startsWith('# ')) {
-                      return (
-                        <h1 key={lineIdx} className="text-xl font-bold mt-4 mb-2">
-                          {line.slice(2)}
-                        </h1>
-                      );
-                    }
-                    if (line.startsWith('### ')) {
-                      return (
-                        <h3 key={lineIdx} className="text-base font-semibold mt-3 mb-1">
-                          {line.slice(4)}
-                        </h3>
-                      );
-                    }
-                    if (line.startsWith('- ') || line.startsWith('* ')) {
-                      return (
-                        <li key={lineIdx} className="ml-4 text-sm">
-                          {line.slice(2)}
-                        </li>
-                      );
-                    }
-                    if (line.trim() === '') return <br key={lineIdx} />;
-                    return (
-                      <p key={lineIdx} className="text-sm leading-relaxed">
-                        {line}
-                      </p>
-                    );
-                  })}
-                </div>
+                <ResearchTextPart key={partIdx} text={(part as { type: 'text'; text: string }).text} />
               );
             }
 

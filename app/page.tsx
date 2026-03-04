@@ -5,10 +5,13 @@ import { useState, FormEvent, useEffect, useRef } from 'react';
 import { SearchForm } from '@/components/search-form';
 import { ResearchDisplay } from '@/components/research-display';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useSection } from '@/context/section-context';
+import { NewsHubSection } from '@/components/news-hub-section';
 
 const transport = new DefaultChatTransport({ api: '/api/research' });
 
 export default function Home() {
+  const { section } = useSection();
   const [query, setQuery] = useState('');
   const { messages, sendMessage, status, error } = useChat({ transport });
   const isLoading = status === 'submitted' || status === 'streaming';
@@ -27,23 +30,30 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-background">
-      <div className="container mx-auto px-4 py-8 max-w-4xl">
-        <h1 className="text-3xl font-bold text-center mb-2">Deep Research Agent</h1>
-        <p className="text-muted-foreground text-sm text-center mb-8">
-          Ask anything — the agent searches the web and synthesizes a comprehensive answer.
-        </p>
-        <SearchForm
-          query={query}
-          onQueryChange={setQuery}
-          onSubmit={handleSubmit}
-          isLoading={isLoading}
-        />
-        <ScrollArea className="mt-6">
-          <ResearchDisplay messages={messages} isLoading={isLoading} error={error} />
-          <div ref={bottomRef} />
-        </ScrollArea>
+    <>
+      <div className={section === 'research' ? '' : 'hidden'}>
+        <main className="min-h-screen bg-background">
+          <div className="container mx-auto px-4 py-8 max-w-4xl">
+            <h1 className="text-3xl font-bold text-center mb-2">Deep Research Agent</h1>
+            <p className="text-muted-foreground text-sm text-center mb-8">
+              Ask anything — the agent searches the web and synthesizes a comprehensive answer.
+            </p>
+            <SearchForm
+              query={query}
+              onQueryChange={setQuery}
+              onSubmit={handleSubmit}
+              isLoading={isLoading}
+            />
+            <ScrollArea className="mt-6">
+              <ResearchDisplay messages={messages} isLoading={isLoading} error={error} />
+              <div ref={bottomRef} />
+            </ScrollArea>
+          </div>
+        </main>
       </div>
-    </main>
+      <div className={section === 'news' ? '' : 'hidden'}>
+        <NewsHubSection />
+      </div>
+    </>
   );
 }

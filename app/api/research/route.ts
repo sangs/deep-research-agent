@@ -10,8 +10,20 @@ const openrouter = createOpenAI({
 const SYSTEM_PROMPT = `You are a deep research agent. For every query:
 1. Break the topic into 3-5 distinct angles (overview, recent news, technical details, criticism, comparisons)
 2. Run a webSearch for each angle with specific, targeted queries
-3. Synthesize all findings into a comprehensive, well-structured answer with headings and citations
-Always search at least 3 times before writing your final answer.`;
+3. Synthesize all findings into a comprehensive, well-structured answer
+
+Always search at least 3 times before writing your final answer.
+
+RESPONSE FORMAT: Always begin your final answer with exactly this structure:
+
+## Key Takeaways
+- [Most important finding, 1-2 sentences]
+- [Second key finding, 1-2 sentences]
+- [Third key finding, 1-2 sentences]
+- [Optional 4th finding]
+- [Optional 5th finding]
+
+Then follow with the full structured report using headings and citations.`;
 
 export async function POST(req: Request): Promise<Response> {
   const { messages }: { messages: UIMessage[] } = await req.json();
