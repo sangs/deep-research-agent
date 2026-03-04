@@ -13,7 +13,7 @@ npx tsc --noEmit # Type check only
 npx shadcn@latest add <component>  # Add a new shadcn/ui component
 
 # Backend
-cd backend && poetry run uvicorn main:app --reload  # Start FastAPI backend (http://localhost:8000)
+cd backend && poetry run uvicorn main:app --reload  # Start FastMCP + Starlette backend (http://localhost:8000)
 ```
 
 Both servers must be running for the full app to work. There are no tests in this project.
@@ -35,7 +35,7 @@ A Next.js 15 app (App Router) with two main sections:
 1. **Deep Research Agent** — agentic multi-step web research with streaming UI
 2. **News Intelligence Hub** — tabbed news dashboard (Global, Regional, Blogs & Sites, Research, Newsletter)
 
-The News Hub calls a Python FastAPI backend; Deep Research calls a Next.js API route directly.
+The News Hub calls a Python FastMCP + Starlette backend; Deep Research calls a Next.js API route directly.
 
 ### Deep Research Data Flow
 ```
@@ -51,7 +51,7 @@ app/page.tsx  (useChat + DefaultChatTransport)
 ```
 components/news-hub-section.tsx  (fetch per tab)
   → POST /api/news  (Next.js route handler)
-    → FastAPI backend  http://localhost:8000
+    → FastMCP + Starlette backend  http://localhost:8000
       → backend/tools/news_tools.py
         → exa_client.py → Exa search API
         → openrouter.py → LLM topic clustering
@@ -70,8 +70,8 @@ components/source-manager.tsx
 ### Frontend
 - `app/page.tsx` — Dual-section layout. `DefaultChatTransport` created outside component to avoid re-renders.
 - `app/api/research/route.ts` — Deep Research agentic loop. Uses `streamText` with `stopWhen: stepCountIs(10)`. Model: `google/gemini-2.0-flash-001` via OpenRouter.
-- `app/api/news/route.ts` — Proxies News Hub requests to the FastAPI backend.
-- `app/api/sources/route.ts` — Proxies source CRUD to the FastAPI backend.
+- `app/api/news/route.ts` — Proxies News Hub requests to the FastMCP + Starlette backend.
+- `app/api/sources/route.ts` — Proxies source CRUD to the FastMCP + Starlette backend.
 - `lib/tools.ts` — Exa `webSearchTool`. Registered as `webSearch` server-side; client part type is `tool-webSearch`.
 - `components/research-display.tsx` — Renders `message.parts`. Tool parts cast via `as unknown as {...}` (TypeScript doesn't know tool-specific types).
 - `components/news-hub-section.tsx` — News Hub tab container with Global/Regional/Curated/Research tabs.
@@ -84,7 +84,7 @@ components/source-manager.tsx
 - `lib/excerpt-utils.ts` — Text truncation helpers for article excerpts.
 
 ### Backend (`backend/`)
-- `main.py` — FastAPI app. Routes: `POST /news`, `GET/POST /sources`.
+- `main.py` — FastMCP server + Starlette app. Routes: `POST /digest`, `GET/POST /sources`, `Mount /mcp` (MCP HTTP interface).
 - `services/exa_client.py` — Exa search + contents fetching, with region and time range support.
 - `services/openrouter.py` — LLM calls via OpenRouter for topic clustering / summarisation.
 - `tools/news_tools.py` — Orchestrates multi-query news fetching and cluster grouping.

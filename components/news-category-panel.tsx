@@ -97,7 +97,7 @@ export function NewsCategoryPanel({
           </div>
 
           {mode === 'newsletter' && (
-            <Badge className="text-xs bg-amber-100 text-amber-700 border-0">Coming Soon</Badge>
+            <Badge className="text-xs bg-primary/15 text-primary border border-primary/25">Coming Soon</Badge>
           )}
           {mode !== 'newsletter' && status === 'loading' && (
             <Badge variant="outline" className="text-xs animate-pulse">Searching…</Badge>

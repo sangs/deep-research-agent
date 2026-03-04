@@ -1,27 +1,31 @@
 'use client';
 
+import { Microscope, Newspaper } from 'lucide-react';
 import { useSection } from '@/context/section-context';
 
 const links = [
-  { id: 'research', label: 'Deep Research' },
-  { id: 'news',     label: 'News Hub'      },
+  { id: 'research', label: 'Deep Research', icon: Microscope },
+  { id: 'news',     label: 'News Hub',      icon: Newspaper  },
 ] as const;
 
 export function NavLinks() {
   const { section, setSection } = useSection();
   return (
-    <>
-      {links.map(({ id, label }) => (
+    <div className="flex items-center bg-muted/50 rounded-full p-1 border border-border/50 gap-0.5">
+      {links.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
           onClick={() => setSection(id)}
-          className={section === id
-            ? 'bg-muted text-foreground font-medium rounded-md px-2.5 py-1'
-            : 'text-muted-foreground hover:text-foreground transition-colors px-2.5 py-1'}
+          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-sm font-medium transition-all duration-200 ${
+            section === id
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
         >
-          {label}
+          <Icon className="h-3.5 w-3.5 flex-shrink-0" />
+          <span className="hidden sm:inline">{label}</span>
         </button>
       ))}
-    </>
+    </div>
   );
 }

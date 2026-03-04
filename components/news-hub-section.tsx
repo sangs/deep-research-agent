@@ -84,12 +84,12 @@ export function NewsHubSection() {
     const { status, count } = tabStatus[tabId];
     if (status === 'loading') {
       return (
-        <span className="ml-1.5 inline-flex h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+        <span className="ml-1.5 inline-flex h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
       );
     }
     if (status === 'done' && count > 0) {
       return (
-        <Badge variant="secondary" className="ml-1.5 text-[10px] px-1 py-0 h-4 min-w-[18px] justify-center">
+        <Badge className="ml-1.5 text-[10px] px-1 py-0 h-4 min-w-[18px] justify-center bg-primary/15 text-primary border-primary/25 border">
           {count}
         </Badge>
       );
@@ -105,7 +105,7 @@ export function NewsHubSection() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-xl font-bold tracking-tight">News Intelligence Dashboard</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">
+            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
               AI-aggregated news across global sources, regional feeds, curated blogs, and newsletter
               subscriptions. Each tab runs independently.
             </p>
