@@ -64,34 +64,32 @@ export function SourceCard({ result }: SourceCardProps) {
   const contentType = getContentType(result.url);
   const rawExcerpt =
     EXCERPT_MODE === 'highlights'
-      ? cleanExcerpt(result.highlights?.[0] ?? result.text) // always run cleanExcerpt — highlights can contain markdown too
+      ? cleanExcerpt(result.highlights?.[0] ?? result.text)
       : cleanExcerpt(result.text);
   const excerpt = stripLeadingTitle(rawExcerpt, result.title);
 
   return (
-    <Card className="h-full hover:shadow-md transition-shadow">
-      <CardHeader className="pb-2 space-y-1">
+    <Card className="h-full border-l-2 border-l-primary/40 hover:border-l-primary hover:shadow-lg hover:shadow-primary/5 transition-all duration-200 bg-card/80">
+      <CardHeader className="pb-2 space-y-1.5">
         <a
           href={result.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-sm font-medium leading-snug hover:underline text-blue-600 dark:text-blue-400 line-clamp-2"
+          className="text-sm font-medium leading-snug hover:text-primary transition-colors line-clamp-2"
         >
           {result.title}
         </a>
-        <div className="flex items-center gap-2 flex-wrap">
-          <Badge variant="secondary" className="text-xs font-normal">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Badge className="text-[10px] font-medium border px-1.5 py-0 h-4 bg-primary/10 text-primary border-primary/20">
             {domain}
           </Badge>
           {contentType && (
-            <Badge variant="outline" className="text-xs font-normal gap-1">
+            <Badge variant="outline" className="text-[10px] font-normal gap-1 px-1.5 py-0 h-4">
               {contentType.emoji} {contentType.label}
             </Badge>
           )}
           {date && (
-            <Badge variant="outline" className="text-xs font-normal">
-              {date}
-            </Badge>
+            <span className="text-[10px] text-muted-foreground tabular-nums">{date}</span>
           )}
         </div>
       </CardHeader>

@@ -26,35 +26,40 @@ function formatDate(dateStr: string | null): string | null {
   }
 }
 
-const modeTints: Record<string, string> = {
-  general: 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300',
-  curated: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
-  region: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
+const modeAccent: Record<string, string> = {
+  general: 'border-l-primary',
+  curated: 'border-l-accent',
+  region:  'border-l-chart-5',
+};
+
+const sourceChip: Record<string, string> = {
+  general: 'bg-primary/10 text-primary border-primary/20',
+  curated: 'bg-accent/10 text-accent border-accent/20',
+  region:  'bg-orange-500/10 text-orange-400 border-orange-500/20',
 };
 
 export function NewsCard({ article, mode = 'general' }: NewsCardProps) {
   const date = formatDate(article.published_date);
-  const tint = modeTints[mode] ?? modeTints.general;
+  const accent = modeAccent[mode] ?? modeAccent.general;
+  const chip = sourceChip[mode] ?? sourceChip.general;
 
   return (
-    <Card className="h-full hover:shadow-md transition-shadow">
-      <CardHeader className="pb-2 space-y-1">
+    <Card className={`h-full border-l-2 ${accent} hover:shadow-lg hover:shadow-primary/5 transition-all duration-200 bg-card/80`}>
+      <CardHeader className="pb-2 space-y-1.5">
         <a
           href={article.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-sm font-medium leading-snug hover:underline text-blue-600 dark:text-blue-400 line-clamp-2"
+          className="text-sm font-medium leading-snug hover:text-primary transition-colors line-clamp-2"
         >
           {article.title}
         </a>
-        <div className="flex items-center gap-2 flex-wrap">
-          <Badge className={`text-xs font-normal border-0 ${tint}`}>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Badge className={`text-[10px] font-medium border px-1.5 py-0 h-4 ${chip}`}>
             {article.source}
           </Badge>
           {date && (
-            <Badge variant="outline" className="text-xs font-normal">
-              {date}
-            </Badge>
+            <span className="text-[10px] text-muted-foreground tabular-nums">{date}</span>
           )}
         </div>
       </CardHeader>
