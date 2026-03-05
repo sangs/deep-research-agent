@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { NewsDashboard, type NewsDigest } from '@/components/news-dashboard';
 import { Search, FileText, AlertCircle } from 'lucide-react';
@@ -19,8 +19,23 @@ export function useNewsStream() {
   const [digest, setDigest] = useState<NewsDigest | null>(null);
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  function stop() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStatus('idle');
+    setEvents([]);
+    setDigest(null);
+    setErrorMsg(null);
+  }
 
   async function run(request: { question?: string; mode: string; time_range: string; region?: string | null }) {
+    // Cancel any in-flight request
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setStatus('loading');
     setEvents([]);
     setDigest(null);
@@ -31,6 +46,7 @@ export function useNewsStream() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
+        signal: controller.signal,
       });
 
       if (!res.body) throw new Error('No response body');
@@ -39,46 +55,51 @@ export function useNewsStream() {
       const decoder = new TextDecoder();
       let buffer = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
 
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const raw = line.slice(6).trim();
-          if (!raw) continue;
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6).trim();
+            if (!raw) continue;
 
-          try {
-            const event = JSON.parse(raw) as NewsStreamEvent;
+            try {
+              const event = JSON.parse(raw) as NewsStreamEvent;
 
-            if (event.type === 'done') {
-              setStatus('done');
-            } else if (event.type === 'error') {
-              setErrorMsg(event.message);
-              setStatus('error');
-            } else if (event.type === 'digest') {
-              const { type: _, ...digestData } = event;
-              setDigest(digestData as NewsDigest);
-              setEvents((prev) => [...prev, event]);
-            } else {
-              setEvents((prev) => [...prev, event]);
+              if (event.type === 'done') {
+                setStatus('done');
+              } else if (event.type === 'error') {
+                setErrorMsg(event.message);
+                setStatus('error');
+              } else if (event.type === 'digest') {
+                const { type: _, ...digestData } = event;
+                setDigest(digestData as NewsDigest);
+                setEvents((prev) => [...prev, event]);
+              } else {
+                setEvents((prev) => [...prev, event]);
+              }
+            } catch {
+              // skip malformed line
             }
-          } catch {
-            // skip malformed line
           }
         }
+      } finally {
+        reader.cancel();
       }
     } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') return; // user stopped — stay idle
       setErrorMsg(e instanceof Error ? e.message : 'Unknown error');
       setStatus('error');
     }
   }
 
-  return { events, digest, status, errorMsg, run };
+  return { events, digest, status, errorMsg, run, stop };
 }
 
 interface NewsDisplayProps {
