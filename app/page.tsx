@@ -13,7 +13,7 @@ const transport = new DefaultChatTransport({ api: '/api/research' });
 export default function Home() {
   const { section } = useSection();
   const [query, setQuery] = useState('');
-  const { messages, sendMessage, status, error } = useChat({ transport });
+  const { messages, sendMessage, status, error, stop } = useChat({ transport });
   const isLoading = status === 'submitted' || status === 'streaming';
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -43,6 +43,9 @@ export default function Home() {
               onQueryChange={setQuery}
               onSubmit={handleSubmit}
               isLoading={isLoading}
+              onStop={stop}
+              label="Research question"
+              focusInput={section === 'research'}
             />
             <ScrollArea className="mt-6">
               <ResearchDisplay messages={messages} isLoading={isLoading} error={error} />

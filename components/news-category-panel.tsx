@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { NewsPanel } from '@/components/news-panel';
 import { useNewsStream } from '@/components/news-display';
-import { Search, Clock, AlertCircle, Play } from 'lucide-react';
+import { Search, Clock, AlertCircle, Play, Square, MessageSquare } from 'lucide-react';
 
 type TimeRange = 'today' | 'yesterday' | 'week' | 'month';
 type Region = 'US' | 'India' | 'Europe' | 'APAC' | 'UK' | 'LatAm';
@@ -51,7 +51,7 @@ export function NewsCategoryPanel({
   onStatusChange,
   onManageSources,
 }: NewsCategoryPanelProps) {
-  const { events, digest, status, errorMsg, run } = useNewsStream();
+  const { events, digest, status, errorMsg, run, stop } = useNewsStream();
 
   const [question, setQuestion] = useState('');
   const [timeRange, setTimeRange] = useState<TimeRange>('week');
@@ -119,15 +119,36 @@ export function NewsCategoryPanel({
 
         <p className="text-xs text-muted-foreground">{description}</p>
 
-        {/* Search-progress badges */}
-        {searchEvents.length > 0 && (
+        {/* During search — query progress badges (animated, non-clickable) */}
+        {status === 'loading' && searchEvents.length > 0 && (
           <div className="flex flex-wrap gap-1 pt-0.5">
             {searchEvents.map((e, i) => (
-              <Badge key={i} variant="outline" className="text-xs gap-1 font-normal py-0 h-5">
+              <Badge key={i} variant="outline" className="text-xs gap-1 font-normal py-0 h-5 animate-pulse">
                 <Search className="h-2.5 w-2.5" />
                 {e.query}
               </Badge>
             ))}
+          </div>
+        )}
+
+        {/* After load — clickable topic-label chips */}
+        {digest && digest.topics.length > 0 && (
+          <div className="flex flex-wrap gap-1 pt-0.5">
+            {[...digest.topics]
+              .sort((a, b) => b.article_count - a.article_count)
+              .map((t, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    const slug = t.label.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+                    document.getElementById(`topic-${slug}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }}
+                  className="inline-flex items-center gap-1 text-xs font-normal py-0 h-5 px-2 rounded-full border border-border bg-background hover:border-primary hover:text-primary transition-colors cursor-pointer"
+                >
+                  <Search className="h-2.5 w-2.5" />
+                  {t.label}
+                </button>
+              ))}
           </div>
         )}
       </div>
@@ -135,16 +156,23 @@ export function NewsCategoryPanel({
       {/* ── Per-panel filter UI (not for newsletter) ─────────────── */}
       {mode !== 'newsletter' && (
         <div className="border-b px-4 py-3 space-y-2 flex-shrink-0 bg-background">
-          <textarea
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleRun();
-            }}
-            placeholder={placeholder_text}
-            rows={2}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
-          />
+          <div className="border-l-4 border-primary/70 bg-primary/10 pl-3 pr-1 pt-2 pb-2 rounded-md space-y-1.5">
+            <p className="text-xs font-medium flex items-center gap-1.5">
+              <MessageSquare className="h-3 w-3 text-primary/70" />
+              Ask a specific question
+              <span className="font-normal text-muted-foreground">(optional)</span>
+            </p>
+            <textarea
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleRun();
+              }}
+              placeholder={placeholder_text}
+              rows={2}
+              className="w-full rounded-md border border-input bg-background/60 px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
+            />
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             {mode === 'research' ? (
               <p className="text-xs text-muted-foreground italic">
@@ -182,12 +210,14 @@ export function NewsCategoryPanel({
 
             <Button
               size="sm"
-              className="h-7 text-xs gap-1 ml-auto"
-              onClick={handleRun}
-              disabled={status === 'loading'}
+              className={status === 'loading' ? 'h-7 text-xs gap-1 ml-auto bg-destructive hover:bg-destructive/90 text-white' : 'h-7 text-xs gap-1 ml-auto'}
+              onClick={status === 'loading' ? stop : handleRun}
             >
-              <Play className="h-3 w-3" />
-              {status === 'loading' ? 'Running…' : 'Run'}
+              {status === 'loading' ? (
+                <><Square className="h-3 w-3" /> Stop</>
+              ) : (
+                <><Play className="h-3 w-3" /> Run</>
+              )}
             </Button>
           </div>
         </div>

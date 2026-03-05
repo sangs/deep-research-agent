@@ -50,7 +50,7 @@ export function NewsCard({ article, mode = 'general' }: NewsCardProps) {
           href={article.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-sm font-medium leading-snug hover:text-primary transition-colors line-clamp-2"
+          className="text-[15px] font-semibold leading-snug hover:text-primary transition-colors line-clamp-2"
         >
           {article.title}
         </a>

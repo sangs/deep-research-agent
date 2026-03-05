@@ -5,6 +5,10 @@ interface NewsPanelProps {
   mode: 'general' | 'curated' | 'region';
 }
 
+function toSlug(label: string) {
+  return label.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+}
+
 export function NewsPanel({ topics, mode }: NewsPanelProps) {
   if (topics.length === 0) {
     return (
@@ -23,7 +27,8 @@ export function NewsPanel({ topics, mode }: NewsPanelProps) {
           key={`${cluster.label}-${i}`}
           cluster={cluster}
           mode={mode}
-          defaultOpen={i < 3}
+          id={`topic-${toSlug(cluster.label)}`}
+          defaultOpen={i === 0}
         />
       ))}
     </div>

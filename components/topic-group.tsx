@@ -15,19 +15,20 @@ interface TopicGroupProps {
   cluster: TopicCluster;
   mode?: 'general' | 'curated' | 'region';
   defaultOpen?: boolean;
+  id?: string;
 }
 
-export function TopicGroup({ cluster, mode = 'general', defaultOpen = true }: TopicGroupProps) {
+export function TopicGroup({ cluster, mode = 'general', defaultOpen = true, id }: TopicGroupProps) {
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div className="border rounded-lg overflow-hidden">
+    <div id={id} className="border rounded-lg overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
         className="w-full flex items-center justify-between px-4 py-3 bg-muted/50 hover:bg-muted transition-colors text-left"
       >
         <div className="flex items-center gap-2">
-          <span className="font-semibold text-sm">{cluster.label}</span>
+          <span className="font-semibold text-base">{cluster.label}</span>
           <Badge variant="secondary" className="text-xs">
             {cluster.article_count}
           </Badge>
