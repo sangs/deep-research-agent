@@ -18,6 +18,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from tools.news_tools import register_tools
 
+
 # ── FastMCP app ──────────────────────────────────────────────────────────────
 mcp = FastMCP("News Intelligence Hub")
 register_tools(mcp)
@@ -39,6 +40,7 @@ async def digest_endpoint(request: Request) -> Response:
     region = body.get('region') or None
     custom_domains = body.get('custom_domains') or None
     question = body.get('question') or None
+    conversation_history = body.get('conversation_history') or None
 
     from services.openrouter import run_news_agent
 
@@ -55,6 +57,7 @@ async def digest_endpoint(request: Request) -> Response:
                 region=region,
                 custom_domains=custom_domains,
                 question=question,
+                conversation_history=conversation_history,
                 emit_event=emit,
             )
 
@@ -79,73 +82,12 @@ async def digest_endpoint(request: Request) -> Response:
     )
 
 
-# ── Sources REST endpoint (for Next.js /api/sources proxy) ───────────────────
-async def sources_endpoint(request: Request) -> Response:
-    from tools.news_tools import load_sources, persist_sources
-
-    if request.method == 'GET':
-        data = load_sources()
-        return Response(
-            json.dumps({
-                'news_sites': data.get('news_sites', []),
-                'research_sites': data.get('research_sites', []),
-                'newsletters': data.get('newsletters', []),
-            }),
-            media_type='application/json',
-        )
-
-    try:
-        body = await request.json()
-    except Exception:
-        return Response('{"error":"invalid json"}', status_code=400, media_type='application/json')
-
-    action = body.get('action', 'list')
-    domains = body.get('domains', [])
-    list_type = body.get('list_type', 'news_sites')
-    if list_type not in ('news_sites', 'research_sites'):
-        list_type = 'news_sites'
-
-    data = load_sources()
-    target_list: list[str] = data.get(list_type, [])
-
-    if action == 'add':
-        added = []
-        for d in domains:
-            d = d.lower().strip()
-            if d and d not in target_list:
-                target_list.append(d)
-                added.append(d)
-        data[list_type] = target_list
-        persist_sources(data)
-        return Response(json.dumps({'added': added, 'total': len(target_list), 'list_type': list_type}), media_type='application/json')
-
-    elif action == 'remove':
-        removed = []
-        for d in domains:
-            d = d.lower().strip()
-            if d in target_list:
-                target_list.remove(d)
-                removed.append(d)
-        data[list_type] = target_list
-        persist_sources(data)
-        return Response(json.dumps({'removed': removed, 'total': len(target_list), 'list_type': list_type}), media_type='application/json')
-
-    return Response(
-        json.dumps({
-            'news_sites': data.get('news_sites', []),
-            'research_sites': data.get('research_sites', []),
-        }),
-        media_type='application/json',
-    )
-
-
 # ── Mount everything on a single Starlette app ───────────────────────────────
 def create_app():
     mcp_app = mcp.http_app(path='/mcp')
 
     routes = [
         Route('/digest', endpoint=digest_endpoint, methods=['POST']),
-        Route('/sources', endpoint=sources_endpoint, methods=['GET', 'POST']),
     ]
 
     app = Starlette(routes=routes)

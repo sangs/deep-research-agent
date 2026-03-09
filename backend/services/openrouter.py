@@ -127,7 +127,7 @@ async def _fetch_articles(name: str, args: dict, custom_domains: list[str] | Non
             category='news',
         )
     elif name == 'news_search_curated':
-        active_domains = args.get('domains') or custom_domains or load_sources().get('news_sites', [])
+        active_domains = args.get('domains') or custom_domains or (await load_sources()).get('news_sites', [])
         return await search_news(
             query=args['query'],
             num_results=args.get('num_results', 8),
@@ -137,7 +137,7 @@ async def _fetch_articles(name: str, args: dict, custom_domains: list[str] | Non
             category='news',
         )
     elif name == 'news_search_research':
-        active_domains = args.get('domains') or custom_domains or load_sources().get('research_sites', [])
+        active_domains = args.get('domains') or custom_domains or (await load_sources()).get('research_sites', [])
         return await search_news(
             query=args['query'],
             num_results=args.get('num_results', 8),
@@ -184,7 +184,8 @@ async def _dispatch_tool(
 
 
 def _build_system_prompt(
-    mode: str, time_range: str, region: str | None, dates: dict, question: str | None
+    mode: str, time_range: str, region: str | None, dates: dict, question: str | None,
+    conversation_history: list[dict] | None = None,
 ) -> str:
     start = dates['start']
     end = dates['end']
@@ -247,6 +248,22 @@ SEARCH STRATEGY: {default_mode_instruction}"""
         else 'NOTE: mode=research uses news_search_research which has NO date parameters. Do NOT pass start_date or end_date to any tool call.'
     )
 
+    if conversation_history:
+        history_lines = []
+        for i, entry in enumerate(conversation_history):
+            q = entry.get('question') or 'general search'
+            topics = entry.get('topics', [])
+            topics_str = ', '.join(topics) if topics else 'none found'
+            history_lines.append(f'  Turn {i + 1} — query: "{q}" → topics: {topics_str}')
+        history_block = (
+            '\n\nCONVERSATION HISTORY (earlier searches in this session):\n'
+            + '\n'.join(history_lines)
+            + '\nSearch for angles and topics NOT already covered above. '
+            'If the current question explicitly revisits a prior topic, go deeper on it.'
+        )
+    else:
+        history_block = ''
+
     return f"""You are a news aggregation agent. Your job is to search for news and return a structured digest.
 
 TIME RANGE: {time_range}
@@ -286,7 +303,8 @@ GROUPING RULES:
 - 2-6 word labels, title case, no verbs
 - Same story from multiple sources = separate articles in ONE topic cluster (no deduplication)
 - Sort topics by number of article_ids descending
-- Include ALL article IDs found; do not filter or deduplicate"""
+- Include ALL article IDs found; do not filter or deduplicate
+{history_block}"""
 
 
 def _assemble_digest(
@@ -379,9 +397,10 @@ async def run_news_agent(
     custom_domains: list[str] | None,
     emit_event: Callable[[dict], Awaitable[None]] | None,
     question: str | None = None,
+    conversation_history: list[dict] | None = None,
 ) -> NewsDigest:
     dates = resolve_date_range(time_range)
-    system = _build_system_prompt(mode, time_range, region, dates, question)
+    system = _build_system_prompt(mode, time_range, region, dates, question, conversation_history)
 
     mode_tool_name = _MODE_TOOL.get(mode)
     tools_for_mode = (
