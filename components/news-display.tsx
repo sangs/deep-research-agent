@@ -14,19 +14,65 @@ type NewsStreamEvent =
 
 type Status = 'idle' | 'loading' | 'done' | 'error';
 
+type ThreadEntry = {
+  question: string | undefined;
+  digest: NewsDigest;
+  fromCache: boolean;
+};
+
+export type { NewsDigest, ThreadEntry };
+
 export function useNewsStream() {
   const [events, setEvents] = useState<NewsStreamEvent[]>([]);
-  const [digest, setDigest] = useState<NewsDigest | null>(null);
+  const [thread, setThread] = useState<ThreadEntry[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Ref keeps thread current inside async run() and sync stop()/reset()
+  const threadRef = useRef<ThreadEntry[]>([]);
 
+  // Derived from latest thread entry
+  const currentEntry = thread[thread.length - 1] ?? null;
+  const digest = currentEntry?.digest ?? null;
+  const fromCache = currentEntry?.fromCache ?? false;
+
+  function _appendToThread(entry: ThreadEntry) {
+    const next = [...threadRef.current, entry];
+    threadRef.current = next;
+    setThread(next);
+  }
+
+  function _clearThread() {
+    threadRef.current = [];
+    setThread([]);
+  }
+
+  /** Restore a previously cached digest without calling the backend */
+  function restore(cachedDigest: NewsDigest, question?: string) {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    _appendToThread({ question, digest: cachedDigest, fromCache: true });
+    setStatus('done');
+    setEvents([]);
+    setErrorMsg(null);
+  }
+
+  /** Stop an in-flight request; keep existing thread results visible */
   function stop() {
     abortRef.current?.abort();
     abortRef.current = null;
+    setStatus(threadRef.current.length > 0 ? 'done' : 'idle');
+    setEvents([]);
+    setErrorMsg(null);
+  }
+
+  /** Clear the full conversation thread and return to idle */
+  function reset() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    _clearThread();
     setStatus('idle');
     setEvents([]);
-    setDigest(null);
     setErrorMsg(null);
   }
 
@@ -38,14 +84,28 @@ export function useNewsStream() {
 
     setStatus('loading');
     setEvents([]);
-    setDigest(null);
     setErrorMsg(null);
+
+    // Build conversation history from existing thread so the backend can avoid
+    // repeating topics already covered and search for new angles.
+    const conversation_history = threadRef.current.map(entry => ({
+      question: entry.question,
+      topics: entry.digest.topics.map(t => t.label),
+    }));
+
+    const fullRequest = conversation_history.length > 0
+      ? { ...request, conversation_history }
+      : request;
+
+    // Track the digest that arrives during this run so we can append it to the
+    // thread on completion (keeping previous entries visible during loading).
+    let newDigest: NewsDigest | null = null;
 
     try {
       const res = await fetch('/api/news', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
+        body: JSON.stringify(fullRequest),
         signal: controller.signal,
       });
 
@@ -73,13 +133,16 @@ export function useNewsStream() {
               const event = JSON.parse(raw) as NewsStreamEvent;
 
               if (event.type === 'done') {
+                if (newDigest) {
+                  _appendToThread({ question: request.question, digest: newDigest, fromCache: false });
+                }
                 setStatus('done');
               } else if (event.type === 'error') {
                 setErrorMsg(event.message);
                 setStatus('error');
               } else if (event.type === 'digest') {
                 const { type: _, ...digestData } = event;
-                setDigest(digestData as NewsDigest);
+                newDigest = digestData as NewsDigest;
                 setEvents((prev) => [...prev, event]);
               } else {
                 setEvents((prev) => [...prev, event]);
@@ -93,13 +156,13 @@ export function useNewsStream() {
         reader.cancel();
       }
     } catch (e) {
-      if (e instanceof Error && e.name === 'AbortError') return; // user stopped — stay idle
+      if (e instanceof Error && e.name === 'AbortError') return; // user stopped — stay as-is
       setErrorMsg(e instanceof Error ? e.message : 'Unknown error');
       setStatus('error');
     }
   }
 
-  return { events, digest, status, errorMsg, run, stop };
+  return { events, digest, thread, status, errorMsg, fromCache, run, stop, restore, reset };
 }
 
 interface NewsDisplayProps {

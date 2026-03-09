@@ -1,8 +1,7 @@
-import json
-import os
-from pathlib import Path
+import time
 from typing import Literal
 
+from services.db import get_pool
 from services.exa_client import search_news
 
 REGION_KEYWORDS: dict[str, str] = {
@@ -14,17 +13,34 @@ REGION_KEYWORDS: dict[str, str] = {
     'LatAm': 'Latin America Brazil Mexico',
 }
 
-SOURCES_FILE = Path(__file__).parent.parent / 'config' / 'default_sources.json'
+
+async def load_sources() -> dict:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT domain, list_type FROM curated_sources ORDER BY added_at"
+        )
+    result: dict = {'news_sites': [], 'research_sites': [], 'newsletters': []}
+    for row in rows:
+        lt = row['list_type']
+        if lt in result:
+            result[lt].append(row['domain'])
+    return result
 
 
-def load_sources() -> dict:
-    with open(SOURCES_FILE) as f:
-        return json.load(f)
-
-
-def persist_sources(data: dict) -> None:
-    with open(SOURCES_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
+async def persist_sources(data: dict) -> None:
+    """Replace the entire source list atomically."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DELETE FROM curated_sources")
+            for list_type, domains in data.items():
+                for domain in domains:
+                    await conn.execute(
+                        "INSERT INTO curated_sources (id, domain, list_type, added_at) "
+                        "VALUES (gen_random_uuid(), $1, $2, $3)",
+                        domain, list_type, int(time.time() * 1000)
+                    )
 
 
 def register_tools(mcp) -> None:
@@ -77,7 +93,7 @@ def register_tools(mcp) -> None:
         Uses news_sites from config (well-indexed tech news sites and AI lab blogs).
         Pass domains to override the default list.
         """
-        active_domains = domains or load_sources().get('news_sites', [])
+        active_domains = domains or (await load_sources()).get('news_sites', [])
         return await search_news(
             query=query,
             num_results=num_results,
@@ -98,7 +114,7 @@ def register_tools(mcp) -> None:
         Uses research_sites from config (AI lab blogs, paper repositories).
         Pass domains to override the default list.
         """
-        active_domains = domains or load_sources().get('research_sites', [])
+        active_domains = domains or (await load_sources()).get('research_sites', [])
         return await search_news(
             query=query,
             num_results=num_results,
@@ -114,11 +130,11 @@ def register_tools(mcp) -> None:
         """
         Manage the news_sites or research_sites domain list.
         action='list'   → returns current lists
-        action='add'    → adds domains to list_type, persists to config/default_sources.json
-        action='remove' → removes domains from list_type, persists to config/default_sources.json
+        action='add'    → adds domains to list_type, persists to Supabase curated_sources table
+        action='remove' → removes domains from list_type, persists to Supabase curated_sources table
         list_type: 'news_sites' (default) or 'research_sites'
         """
-        data = load_sources()
+        data = await load_sources()
         target_list: list[str] = data.get(list_type, [])
 
         if action == 'list':
@@ -137,7 +153,7 @@ def register_tools(mcp) -> None:
                     target_list.append(d)
                     added.append(d)
             data[list_type] = target_list
-            persist_sources(data)
+            await persist_sources(data)
             return {'action': 'add', 'list_type': list_type, 'added': added, 'total': len(target_list)}
 
         elif action == 'remove':
@@ -148,7 +164,7 @@ def register_tools(mcp) -> None:
                     target_list.remove(d)
                     removed.append(d)
             data[list_type] = target_list
-            persist_sources(data)
+            await persist_sources(data)
             return {'action': 'remove', 'list_type': list_type, 'removed': removed, 'total': len(target_list)}
 
         return {'error': f'Unknown action: {action}'}
@@ -160,6 +176,7 @@ def register_tools(mcp) -> None:
         region: str | None = None,
         custom_domains: list[str] | None = None,
         question: str | None = None,
+        conversation_history: list[dict] | None = None,
     ) -> dict:
         """
         High-level orchestrator. Runs the agentic loop and returns a full NewsDigest.
@@ -168,6 +185,7 @@ def register_tools(mcp) -> None:
         region: required when mode='region'
         custom_domains: optional override for curated mode
         question: natural language question to guide the search
+        conversation_history: list of {question, topics} from prior turns in the session
         """
         from services.openrouter import run_news_agent
 
@@ -178,5 +196,6 @@ def register_tools(mcp) -> None:
             custom_domains=custom_domains,
             emit_event=None,
             question=question,
+            conversation_history=conversation_history,
         )
         return digest.model_dump()

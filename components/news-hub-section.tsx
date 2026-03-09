@@ -123,24 +123,24 @@ export function NewsHubSection() {
 
         {/* Tabbed panels */}
         <Tabs defaultValue="global" className="w-full">
-          <TabsList className="grid w-full grid-cols-5 h-10">
-            <TabsTrigger value="global" className="text-xs flex items-center gap-0">
+          <TabsList className="grid w-full grid-cols-5 h-11">
+            <TabsTrigger value="global" className="text-sm font-medium flex items-center gap-0">
               🌍 Global<TabBadge tabId="global" />
             </TabsTrigger>
-            <TabsTrigger value="regional" className="text-xs flex items-center gap-0">
+            <TabsTrigger value="regional" className="text-sm font-medium flex items-center gap-0">
               🗺️ Regional<TabBadge tabId="regional" />
             </TabsTrigger>
-            <TabsTrigger value="curated" className="text-xs flex items-center gap-0">
+            <TabsTrigger value="curated" className="text-sm font-medium flex items-center gap-0">
               📰 Blogs &amp; Sites<TabBadge tabId="curated" />
             </TabsTrigger>
-            <TabsTrigger value="research" className="text-xs flex items-center gap-0">
+            <TabsTrigger value="research" className="text-sm font-medium flex items-center gap-0">
               🔬 Research<TabBadge tabId="research" />
             </TabsTrigger>
             <span
               title="Coming soon — Gmail integration not yet implemented"
               className="cursor-not-allowed flex flex-1"
             >
-              <TabsTrigger value="newsletter" disabled className="text-xs w-full pointer-events-none opacity-40 gap-1">
+              <TabsTrigger value="newsletter" disabled className="text-sm font-medium w-full pointer-events-none opacity-40 gap-1">
                 📬 Newsletter <Lock className="h-2.5 w-2.5" />
               </TabsTrigger>
             </span>

@@ -1,59 +1,113 @@
 'use client';
-import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport } from 'ai';
-import { useState, FormEvent, useEffect, useRef } from 'react';
-import { SearchForm } from '@/components/search-form';
-import { ResearchDisplay } from '@/components/research-display';
-import { ScrollArea } from '@/components/ui/scroll-area';
+
+import { useState, useEffect, useCallback } from 'react';
+import { type UIMessage } from 'ai';
 import { useSection } from '@/context/section-context';
 import { NewsHubSection } from '@/components/news-hub-section';
-
-const transport = new DefaultChatTransport({ api: '/api/research' });
+import { ResearchSection } from '@/components/research-section';
+import { HistoryDrawer } from '@/components/history-drawer';
+import { Button } from '@/components/ui/button';
+import { History } from 'lucide-react';
+import {
+  listResearchSessions,
+  loadResearchSession,
+  deleteResearchSession,
+  type SessionMeta,
+} from '@/lib/history-client';
 
 export default function Home() {
   const { section } = useSection();
-  const [query, setQuery] = useState('');
-  const { messages, sendMessage, status, error, stop } = useChat({ transport });
-  const isLoading = status === 'submitted' || status === 'streaming';
-  const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom whenever messages update or loading state changes
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [sessionId, setSessionId] = useState<string>('');
+  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
+
+  // Generate session ID on mount (client-only)
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isLoading]);
+    setSessionId(crypto.randomUUID());
+  }, []);
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!query.trim() || isLoading) return;
-    sendMessage({ text: query });
-    setQuery('');
+  // Load session list on mount
+  useEffect(() => {
+    listResearchSessions().then(setSessions);
+  }, []);
+
+  const handleSessionSaved = useCallback((id: string, title: string) => {
+    setSessions((prev) => {
+      const exists = prev.find((s) => s.id === id);
+      const now = Math.floor(Date.now() / 1000);
+      if (exists) {
+        return prev.map((s) => (s.id === id ? { ...s, title, updatedAt: now } : s));
+      }
+      return [{ id, title, createdAt: now, updatedAt: now }, ...prev];
+    });
+  }, []);
+
+  async function handleSelectSession(id: string) {
+    const msgs = await loadResearchSession(id);
+    if (msgs) {
+      setInitialMessages(msgs as UIMessage[]);
+      setSessionId(id);
+    }
+  }
+
+  async function handleDeleteSession(id: string) {
+    await deleteResearchSession(id);
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    // If the deleted session was active, start a new one
+    if (id === sessionId) {
+      setInitialMessages([]);
+      setSessionId(crypto.randomUUID());
+    }
+  }
+
+  function handleNewSession() {
+    setInitialMessages([]);
+    setSessionId(crypto.randomUUID());
   }
 
   return (
     <>
+      {/* History button — only shown in research section */}
+      {section === 'research' && sessionId && (
+        <div className="fixed top-16 left-4 z-60">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-1.5 text-xs h-8 text-muted-foreground hover:text-foreground"
+            onClick={() => setDrawerOpen(true)}
+          >
+            <History className="h-3.5 w-3.5" />
+            History
+          </Button>
+        </div>
+      )}
+
+      <HistoryDrawer
+        open={drawerOpen}
+        sessions={sessions}
+        activeSessionId={sessionId}
+        onClose={() => setDrawerOpen(false)}
+        onSelectSession={handleSelectSession}
+        onDeleteSession={handleDeleteSession}
+        onNewSession={handleNewSession}
+      />
+
       <div className={section === 'research' ? '' : 'hidden'}>
-        <main className="min-h-screen bg-background">
-          <div className="container mx-auto px-4 py-8 max-w-4xl">
-            <h1 className="text-3xl font-bold text-center mb-2">Deep Research Agent</h1>
-            <p className="text-muted-foreground text-sm text-center mb-8">
-              Ask anything — the agent searches the web and synthesizes a comprehensive answer.
-            </p>
-            <SearchForm
-              query={query}
-              onQueryChange={setQuery}
-              onSubmit={handleSubmit}
-              isLoading={isLoading}
-              onStop={stop}
-              label="Research question"
-              focusInput={section === 'research'}
-            />
-            <ScrollArea className="mt-6">
-              <ResearchDisplay messages={messages} isLoading={isLoading} error={error} />
-              <div ref={bottomRef} />
-            </ScrollArea>
-          </div>
-        </main>
+        {/* key forces remount when session changes, so useChat gets fresh initialMessages */}
+        {sessionId && (
+          <ResearchSection
+            key={sessionId}
+            sessionId={sessionId}
+            initialMessages={initialMessages}
+            focusInput={section === 'research'}
+            onSessionSaved={handleSessionSaved}
+            onReset={handleNewSession}
+          />
+        )}
       </div>
+
       <div className={section === 'news' ? '' : 'hidden'}>
         <NewsHubSection />
       </div>
