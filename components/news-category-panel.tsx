@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { NewsPanel } from '@/components/news-panel';
 import { useNewsStream } from '@/components/news-display';
-import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown } from 'lucide-react';
+import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail } from 'lucide-react';
 import { getCachedDigest, saveDigestToCache, buildCacheKey } from '@/lib/history-client';
 import type { ThreadEntry } from '@/components/news-display';
 import type { NewsDigest } from '@/components/news-dashboard';
@@ -87,14 +87,14 @@ interface NewsCategoryPanelProps {
   icon: string;
   title: string;
   description: string;
-  /** Which backend mode this panel uses. 'newsletter' is a UI-only placeholder. */
+  /** Which backend mode this panel uses. */
   mode: 'general' | 'region' | 'curated' | 'research' | 'newsletter';
-  /** Rendered inside the panel body for the newsletter placeholder. */
-  placeholder?: React.ReactNode;
   /** Called whenever search status or article count changes — used for tab badges. */
   onStatusChange?: (status: string, count: number) => void;
   /** Called when the user clicks "Manage sources" in the curated panel header. */
   onManageSources?: () => void;
+  /** @deprecated no longer used */
+  placeholder?: React.ReactNode;
 }
 
 export function NewsCategoryPanel({
@@ -111,12 +111,16 @@ export function NewsCategoryPanel({
   const [question, setQuestion] = useState('');
   const [timeRange, setTimeRange] = useState<TimeRange>('week');
   const [region, setRegion] = useState<Region>('US');
+  // Newsletter-specific state
+  const [nlSenders, setNlSenders] = useState('');
+  const [nlSubjectKw, setNlSubjectKw] = useState('');
+  const [nlBySource, setNlBySource] = useState(false);
   const [expandedPriorRuns, setExpandedPriorRuns] = useState<Set<number>>(new Set());
   const lastRunParamsRef = useRef<{ cacheKey: string } | null>(null);
   const bodyBottomRef = useRef<HTMLDivElement>(null);
 
   const searchEvents = events.filter((e) => e.type === 'searching') as { type: 'searching'; query: string }[];
-  const modeType = mode === 'curated' ? 'curated' : mode === 'research' ? 'curated' : mode === 'region' ? 'region' : 'general';
+  const modeType = mode === 'curated' || mode === 'research' || mode === 'newsletter' ? 'curated' : mode === 'region' ? 'region' : 'general';
   const latestArticleCount = digest ? articleCount(digest) : 0;
 
   useEffect(() => {
@@ -145,7 +149,17 @@ export function NewsCategoryPanel({
   }
 
   async function handleRun() {
-    if (mode === 'newsletter') return;
+    if (mode === 'newsletter') {
+      // Newsletter uses Gmail directly — no Exa cache
+      run({
+        mode: 'newsletter',
+        time_range: timeRange,
+        newsletter_senders: nlSenders.trim() || undefined,
+        newsletter_subject_kw: nlSubjectKw.trim() || undefined,
+        newsletter_by_source: nlBySource,
+      });
+      return;
+    }
 
     const effectiveTimeRange = mode === 'research' ? 'week' : timeRange;
     const effectiveRegion = mode === 'region' ? region : undefined;
@@ -200,13 +214,10 @@ export function NewsCategoryPanel({
             <h2 className="font-semibold text-sm">{title}</h2>
           </div>
 
-          {mode === 'newsletter' && (
-            <Badge className="text-xs bg-primary/15 text-primary border border-primary/25">Coming Soon</Badge>
-          )}
-          {mode !== 'newsletter' && status === 'loading' && (
+          {status === 'loading' && (
             <Badge variant="outline" className="text-xs animate-pulse">Searching…</Badge>
           )}
-          {mode !== 'newsletter' && status === 'done' && digest && (
+          {status === 'done' && digest && (
             <div className="flex items-center gap-1.5">
               {fromCache && (
                 <Badge variant="outline" className="text-xs gap-1 text-primary border-primary/30 bg-primary/5">
@@ -219,7 +230,7 @@ export function NewsCategoryPanel({
               </Badge>
             </div>
           )}
-          {(mode === 'curated' || mode === 'research') && onManageSources && (
+          {(mode === 'curated' || mode === 'research' || mode === 'newsletter') && onManageSources && (
             <button
               onClick={onManageSources}
               className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
@@ -265,7 +276,99 @@ export function NewsCategoryPanel({
         )}
       </div>
 
-      {/* ── Per-panel filter UI (not for newsletter) ─────────────── */}
+      {/* ── Newsletter filter UI ──────────────────────────────────── */}
+      {mode === 'newsletter' && (
+        <div className="border-b px-4 py-3 space-y-3 flex-shrink-0 bg-background">
+
+          {/* Time range */}
+          <div className="space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Date range</p>
+            <ToggleGroup
+              type="single"
+              value={timeRange}
+              onValueChange={(v) => v && setTimeRange(v as TimeRange)}
+              className="flex-wrap"
+            >
+              {TIME_RANGES.map((t) => (
+                <ToggleGroupItem key={t.value} value={t.value} className="text-xs h-7 px-2">
+                  {t.label}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </div>
+
+          {/* Sender filter */}
+          <div className="space-y-1">
+            <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+              <Mail className="h-3 w-3" />
+              From addresses
+              <span className="font-normal">(optional — overrides configured senders)</span>
+            </p>
+            <input
+              type="text"
+              value={nlSenders}
+              onChange={(e) => setNlSenders(e.target.value)}
+              placeholder="Leave blank to use configured newsletter senders"
+              className="w-full rounded-md border border-input bg-background/60 px-3 py-1.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </div>
+
+          {/* Subject keyword filter */}
+          <div className="space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Subject contains
+              <span className="font-normal"> (optional)</span>
+            </p>
+            <input
+              type="text"
+              value={nlSubjectKw}
+              onChange={(e) => setNlSubjectKw(e.target.value)}
+              placeholder="e.g. AI"
+              className="w-full rounded-md border border-input bg-background/60 px-3 py-1.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </div>
+
+          {/* Group mode + Run button */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Group by:</span>
+              <ToggleGroup
+                type="single"
+                value={nlBySource ? 'source' : 'topic'}
+                onValueChange={(v) => v && setNlBySource(v === 'source')}
+              >
+                <ToggleGroupItem value="topic" className="text-xs h-7 px-2">Topic</ToggleGroupItem>
+                <ToggleGroupItem value="source" className="text-xs h-7 px-2">Source</ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+            <div className="flex items-center gap-1.5 ml-auto">
+              {thread.length > 0 && status !== 'loading' && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
+                  onClick={reset}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  New Search
+                </Button>
+              )}
+              <Button
+                size="sm"
+                className={status === 'loading' ? 'h-7 text-xs gap-1 bg-destructive hover:bg-destructive/90 text-white' : 'h-7 text-xs gap-1'}
+                onClick={status === 'loading' ? stop : handleRun}
+              >
+                {status === 'loading' ? (
+                  <><Square className="h-3 w-3" /> Stop</>
+                ) : (
+                  <><Play className="h-3 w-3" /> Run</>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Per-panel filter UI (non-newsletter) ─────────────────── */}
       {mode !== 'newsletter' && (
         <div className="border-b px-4 py-3 space-y-2 flex-shrink-0 bg-background">
           <div className="border-l-4 border-primary/70 bg-primary/10 pl-3 pr-1 pt-2 pb-2 rounded-md space-y-1.5">
@@ -353,13 +456,14 @@ export function NewsCategoryPanel({
 
       {/* ── Panel body ─────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto p-4">
-        {mode === 'newsletter' ? (
-          placeholder
-
-        ) : thread.length === 0 && status === 'idle' ? (
+        {thread.length === 0 && status === 'idle' ? (
           <div className="flex flex-col items-center justify-center h-full text-center py-10 gap-2">
             <Clock className="h-7 w-7 text-muted-foreground opacity-25" />
-            <p className="text-xs text-muted-foreground">Enter a question and click Run ⌘↵</p>
+            <p className="text-xs text-muted-foreground">
+              {mode === 'newsletter'
+                ? 'Set filters above and click Run to pull emails from Gmail'
+                : 'Enter a question and click Run ⌘↵'}
+            </p>
           </div>
 
         ) : thread.length === 0 && status === 'loading' ? (
@@ -419,6 +523,8 @@ export function NewsCategoryPanel({
                         ? `No articles found for ${region} in the ${timeRange} time range. Try a broader topic or a longer time range.`
                         : mode === 'research'
                         ? 'No research articles found. Try a broader query or check your Research Sites sources.'
+                        : mode === 'newsletter'
+                        ? 'No emails found. Try a wider date range or remove the sender/subject filter.'
                         : 'No articles found for this query and time range.'}
                     </p>
                   </div>

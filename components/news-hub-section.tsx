@@ -1,55 +1,13 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Mail, Settings, Lock } from 'lucide-react';
+import { Settings } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { NewsCategoryPanel } from '@/components/news-category-panel';
 import { SourceManager } from '@/components/source-manager';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 
-const PLANNED_NEWSLETTERS = [
-  { name: 'TLDR AI', domain: 'tldr.tech/ai' },
-  { name: 'Alpha Signal', domain: 'alphasignal.ai' },
-  { name: 'The Deep View', domain: 'thedeepview.co' },
-  { name: 'Superhuman AI', domain: 'joinsuperhuman.ai' },
-  { name: 'Chartr', domain: 'chartr.co' },
-  { name: 'Daily Dose of DS', domain: 'dailydoseofds.com' },
-  { name: 'Morning Brew', domain: 'morningbrew.com' },
-  { name: 'The Rundown AI', domain: 'therundown.ai' },
-];
-
-function NewsletterPlaceholder() {
-  return (
-    <div className="space-y-4 py-2">
-      <div className="border border-dashed rounded-lg p-5 text-center space-y-2">
-        <Mail className="h-8 w-8 mx-auto text-muted-foreground opacity-30" />
-        <p className="text-sm font-medium">Gmail Integration Coming Soon</p>
-        <p className="text-xs text-muted-foreground leading-relaxed max-w-xs mx-auto">
-          Will auto-pull your latest newsletter issues directly from Gmail and summarise them here —
-          no manual copy-paste, no missed emails.
-        </p>
-      </div>
-
-      <div>
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-          Planned sources from your subscriptions
-        </p>
-        <div className="grid grid-cols-2 gap-1.5">
-          {PLANNED_NEWSLETTERS.map((n) => (
-            <div key={n.domain} className="flex items-center gap-2 p-2 rounded-md bg-muted/40">
-              <div className="h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />
-              <div className="min-w-0">
-                <p className="text-xs font-medium truncate">{n.name}</p>
-                <p className="text-xs text-muted-foreground font-mono truncate">{n.domain}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 type TabStatus = { status: string; count: number };
 type TabId = 'global' | 'regional' | 'curated' | 'research' | 'newsletter';
@@ -78,6 +36,10 @@ export function NewsHubSection() {
 
   const handleResearchStatus = useCallback((status: string, count: number) => {
     setTabStatus((prev) => ({ ...prev, research: { status, count } }));
+  }, []);
+
+  const handleNewsletterStatus = useCallback((status: string, count: number) => {
+    setTabStatus((prev) => ({ ...prev, newsletter: { status, count } }));
   }, []);
 
   function TabBadge({ tabId }: { tabId: TabId }) {
@@ -136,14 +98,9 @@ export function NewsHubSection() {
             <TabsTrigger value="research" className="text-sm font-medium flex items-center gap-0">
               🔬 Research<TabBadge tabId="research" />
             </TabsTrigger>
-            <span
-              title="Coming soon — Gmail integration not yet implemented"
-              className="cursor-not-allowed flex flex-1"
-            >
-              <TabsTrigger value="newsletter" disabled className="text-sm font-medium w-full pointer-events-none opacity-40 gap-1">
-                📬 Newsletter <Lock className="h-2.5 w-2.5" />
-              </TabsTrigger>
-            </span>
+            <TabsTrigger value="newsletter" className="text-sm font-medium flex items-center gap-0">
+              📬 Newsletter<TabBadge tabId="newsletter" />
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="global" forceMount className="mt-0 border border-t-0 rounded-b-lg min-h-[580px] flex flex-col data-[state=inactive]:hidden">
@@ -192,9 +149,10 @@ export function NewsHubSection() {
             <NewsCategoryPanel
               icon="📬"
               title="Newsletter Subscriptions"
-              description="Your personal AI/ML newsletter issues sourced from Gmail"
+              description="Pull and summarize newsletter emails from your Gmail inbox"
               mode="newsletter"
-              placeholder={<NewsletterPlaceholder />}
+              onStatusChange={handleNewsletterStatus}
+              onManageSources={() => setSourceManagerOpen(true)}
             />
           </TabsContent>
         </Tabs>

@@ -42,7 +42,10 @@ async def digest_endpoint(request: Request) -> Response:
     question = body.get('question') or None
     conversation_history = body.get('conversation_history') or None
 
-    from services.openrouter import run_news_agent
+    # Newsletter-specific params (only used when mode == 'newsletter')
+    newsletter_senders   = [s.strip() for s in (body.get('newsletter_senders') or '').split(',') if s.strip()]
+    newsletter_subject   = body.get('newsletter_subject_kw') or None
+    newsletter_by_source = bool(body.get('newsletter_by_source', False))
 
     async def event_stream():
         events: list[dict] = []
@@ -51,15 +54,26 @@ async def digest_endpoint(request: Request) -> Response:
             events.append(event)
 
         try:
-            digest = await run_news_agent(
-                mode=mode,
-                time_range=time_range,
-                region=region,
-                custom_domains=custom_domains,
-                question=question,
-                conversation_history=conversation_history,
-                emit_event=emit,
-            )
+            if mode == 'newsletter':
+                from services.gmail_service import run_gmail_digest
+                digest = await run_gmail_digest(
+                    time_range=time_range,
+                    senders=newsletter_senders or None,
+                    subject_kw=newsletter_subject,
+                    by_source=newsletter_by_source,
+                    emit_event=emit,
+                )
+            else:
+                from services.openrouter import run_news_agent
+                digest = await run_news_agent(
+                    mode=mode,
+                    time_range=time_range,
+                    region=region,
+                    custom_domains=custom_domains,
+                    question=question,
+                    conversation_history=conversation_history,
+                    emit_event=emit,
+                )
 
             # Yield all accumulated search-progress events first
             for ev in events:

@@ -18,16 +18,6 @@ function normalizeDomain(value: string): string {
     .replace(/\/.*$/, ''); // drop any path
 }
 
-const PLANNED_NEWSLETTERS = [
-  'tldr.tech/ai',
-  'alphasignal.ai',
-  'thedeepview.co',
-  'joinsuperhuman.ai',
-  'chartr.co',
-  'dailydoseofds.com',
-  'morningbrew.com',
-  'therundown.ai',
-];
 
 interface SourceManagerProps {
   open: boolean;
@@ -37,13 +27,17 @@ interface SourceManagerProps {
 export function SourceManager({ open, onClose }: SourceManagerProps) {
   const [domains, setDomains] = useState<string[]>([]);
   const [researchDomains, setResearchDomains] = useState<string[]>([]);
+  const [newsletterDomains, setNewsletterDomains] = useState<string[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [researchInputValue, setResearchInputValue] = useState('');
+  const [newsletterInputValue, setNewsletterInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [savingNews, setSavingNews] = useState(false);
   const [savingResearch, setSavingResearch] = useState(false);
+  const [savingNewsletter, setSavingNewsletter] = useState(false);
   const [newsError, setNewsError] = useState<string | null>(null);
   const [researchError, setResearchError] = useState<string | null>(null);
+  const [newsletterError, setNewsletterError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) fetchSources();
@@ -56,6 +50,7 @@ export function SourceManager({ open, onClose }: SourceManagerProps) {
       const data = await res.json();
       setDomains(data.news_sites ?? []);
       setResearchDomains(data.research_sites ?? []);
+      setNewsletterDomains(data.newsletters ?? []);
     } catch {
       // ignore
     } finally {
@@ -158,6 +153,55 @@ export function SourceManager({ open, onClose }: SourceManagerProps) {
       setResearchError('Network error — could not reach the backend.');
     } finally {
       setSavingResearch(false);
+    }
+  }
+
+  async function addNewsletterDomain() {
+    const normalized = normalizeDomain(newsletterInputValue);
+    if (!normalized) return;
+    if (newsletterDomains.includes(normalized)) {
+      setNewsletterError(`${normalized} is already in the list.`);
+      return;
+    }
+    setNewsletterError(null);
+    setSavingNewsletter(true);
+    try {
+      const res = await fetch('/api/sources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'add', domains: [normalized], list_type: 'newsletters' }),
+      });
+      if (res.ok) {
+        setNewsletterDomains((prev) => [...prev, normalized]);
+        setNewsletterInputValue('');
+      } else {
+        setNewsletterError('Failed to save. Is the backend running?');
+      }
+    } catch {
+      setNewsletterError('Network error — could not reach the backend.');
+    } finally {
+      setSavingNewsletter(false);
+    }
+  }
+
+  async function removeNewsletterDomain(domain: string) {
+    setNewsletterError(null);
+    setSavingNewsletter(true);
+    try {
+      const res = await fetch('/api/sources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'remove', domains: [domain], list_type: 'newsletters' }),
+      });
+      if (res.ok) {
+        setNewsletterDomains((prev) => prev.filter((d) => d !== domain));
+      } else {
+        setNewsletterError('Failed to remove. Is the backend running?');
+      }
+    } catch {
+      setNewsletterError('Network error — could not reach the backend.');
+    } finally {
+      setSavingNewsletter(false);
     }
   }
 
@@ -310,34 +354,78 @@ export function SourceManager({ open, onClose }: SourceManagerProps) {
 
           <Separator />
 
-          {/* ── Newsletter Subscriptions (placeholder) ─────────────── */}
+          {/* ── Newsletter Senders ──────────────────────────────────── */}
           <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <p className="text-xs font-semibold">Newsletter Subscriptions</p>
-              <Badge className="text-xs bg-amber-100 text-amber-700 border-0 py-0">Coming Soon</Badge>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Will auto-pull your latest newsletter issues from Gmail and populate the{' '}
-              <strong>Newsletter Subscriptions</strong> panel. No manual copy-paste needed.
-            </p>
-
-            <div className="border border-dashed rounded-lg p-3 space-y-2">
-              <div className="flex items-center gap-1.5 text-muted-foreground">
-                <Mail className="h-3.5 w-3.5" />
-                <span className="text-xs font-medium">Gmail integration pending</span>
-              </div>
+            <div>
+              <p className="text-xs font-semibold">Newsletter Senders</p>
               <p className="text-xs text-muted-foreground">
-                Planned sources from your subscriptions:
+                Used by the <strong>Newsletter</strong> panel as default Gmail{' '}
+                <code className="text-[10px] bg-muted px-1 rounded">from:</code> filters.
+                Enter a sender domain — any address at that domain matches (e.g.{' '}
+                <code className="text-[10px] bg-muted px-1 rounded">tldrnewsletter.com</code> matches{' '}
+                <code className="text-[10px] bg-muted px-1 rounded">dan@tldrnewsletter.com</code>).
               </p>
-              <div className="grid grid-cols-2 gap-1">
-                {PLANNED_NEWSLETTERS.map((src) => (
-                  <div key={src} className="flex items-center gap-1.5 py-0.5">
-                    <div className="h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />
-                    <span className="text-xs font-mono text-muted-foreground">{src}</span>
-                  </div>
-                ))}
-              </div>
             </div>
+
+            <div className="flex gap-2">
+              <Input
+                placeholder="e.g. tldrnewsletter.com or hello@substack.com"
+                value={newsletterInputValue}
+                onChange={(e) => { setNewsletterInputValue(e.target.value); setNewsletterError(null); }}
+                onKeyDown={(e) => e.key === 'Enter' && addNewsletterDomain()}
+                className="text-xs h-8"
+              />
+              <Button
+                size="sm"
+                className="h-8 px-3"
+                onClick={addNewsletterDomain}
+                disabled={savingNewsletter || !newsletterInputValue.trim()}
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+            </div>
+
+            {newsletterError && (
+              <div className="flex items-center gap-1.5 text-destructive text-xs">
+                <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                {newsletterError}
+              </div>
+            )}
+
+            <ScrollArea className="h-48">
+              {loading ? (
+                <p className="text-xs text-muted-foreground text-center py-4">Loading…</p>
+              ) : (
+                <div className="space-y-1">
+                  {newsletterDomains.map((domain) => (
+                    <div
+                      key={domain}
+                      className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-muted group"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Mail className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                        <span className="text-xs font-mono truncate">{domain}</span>
+                      </div>
+                      <button
+                        onClick={() => removeNewsletterDomain(domain)}
+                        className="opacity-0 group-hover:opacity-100 text-destructive transition-opacity flex-shrink-0"
+                        disabled={savingNewsletter}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                  {newsletterDomains.length === 0 && !loading && (
+                    <p className="text-xs text-muted-foreground text-center py-4">
+                      No senders configured — Newsletter tab will fetch all emails in the date range.
+                    </p>
+                  )}
+                </div>
+              )}
+            </ScrollArea>
+            <p className="text-xs text-muted-foreground">
+              {newsletterDomains.length} sender{newsletterDomains.length !== 1 ? 's' : ''} · Changes save automatically
+            </p>
           </div>
         </div>
       </div>

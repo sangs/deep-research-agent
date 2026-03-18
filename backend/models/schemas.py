@@ -8,6 +8,7 @@ class ArticleItem(BaseModel):
     source: str           # domain extracted from URL
     published_date: Optional[str] = None
     excerpt: str          # first 300 chars of text
+    links: list[str] = []  # additional URLs from the email (newsletter only)
 
 
 class TopicCluster(BaseModel):
