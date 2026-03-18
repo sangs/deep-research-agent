@@ -76,7 +76,16 @@ export function useNewsStream() {
     setErrorMsg(null);
   }
 
-  async function run(request: { question?: string; mode: string; time_range: string; region?: string | null }) {
+  async function run(request: {
+    question?: string;
+    mode: string;
+    time_range: string;
+    region?: string | null;
+    // newsletter-specific (ignored by other modes)
+    newsletter_senders?: string;
+    newsletter_subject_kw?: string;
+    newsletter_by_source?: boolean;
+  }) {
     // Cancel any in-flight request
     abortRef.current?.abort();
     const controller = new AbortController();

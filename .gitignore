@@ -40,8 +40,8 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# local logs and notes
-/logs/
+# local documents and notes
+/documents/
 /Notes/
 
 # python
