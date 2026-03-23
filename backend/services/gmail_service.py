@@ -103,36 +103,61 @@ def _token_path() -> Path:
 def get_gmail_service():
     """Return an authenticated Gmail API service object.
 
-    Reads the stored OAuth token from GMAIL_TOKEN_PATH.  If the token is
-    absent or expired, runs the InstalledAppFlow (opens a browser window) to
-    obtain a new one and saves it for future use.
+    Auth resolution order (first match wins):
+      1. GMAIL_TOKEN_JSON env var — JSON string of the token (Railway / production)
+      2. GMAIL_TOKEN_PATH file    — local filesystem token (local dev, default ~/gmail_token.json)
 
-    Call this once manually from the terminal to complete the initial OAuth
-    authorization before starting the backend server.
+    If neither exists, falls back to InstalledAppFlow (opens browser — local dev only).
+
+    Token refresh is handled automatically by google-auth. On Railway the refreshed
+    token lives in memory only; the GMAIL_TOKEN_JSON env var does not need updating
+    because the refresh_token itself does not expire unless revoked.
     """
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
 
+    token_json_env = os.getenv('GMAIL_TOKEN_JSON', '').strip()
+    creds_json_env = os.getenv('GMAIL_CREDENTIALS_JSON', '').strip()
     token_path = _token_path()
     creds_path = _credentials_path()
 
+    # ── Load token ────────────────────────────────────────────────────────────
     creds = None
-    if token_path.exists():
+    if token_json_env:
+        # Production: token stored as env var JSON string
+        creds = Credentials.from_authorized_user_info(json.loads(token_json_env), SCOPES)
+    elif token_path.exists():
+        # Local dev: token stored as file
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+
+    # ── Refresh or run initial OAuth flow ─────────────────────────────────────
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
+            # Auto-refresh using stored refresh_token (works on Railway)
             creds.refresh(Request())
+            # Persist refreshed token locally if running with file-based auth
+            if not token_json_env and token_path.exists():
+                token_path.write_text(creds.to_json())
         else:
-            if not creds_path.exists():
+            # Initial OAuth flow — local dev only (requires browser)
+            if creds_json_env:
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                    f.write(creds_json_env)
+                    tmp_creds_path = f.name
+                flow = InstalledAppFlow.from_client_secrets_file(tmp_creds_path, SCOPES)
+                Path(tmp_creds_path).unlink(missing_ok=True)
+            elif creds_path.exists():
+                flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
+            else:
                 raise FileNotFoundError(
-                    f'credentials.json not found at {creds_path}.\n'
-                    'Download it from Google Cloud Console → APIs & Services → Credentials.'
+                    'Gmail credentials not found. Set GMAIL_CREDENTIALS_JSON env var (production) '
+                    f'or place credentials.json at {creds_path} (local dev).'
                 )
-            flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
             creds = flow.run_local_server(port=0)
-        token_path.write_text(creds.to_json())
+            token_path.write_text(creds.to_json())
 
     return build('gmail', 'v1', credentials=creds)
 
