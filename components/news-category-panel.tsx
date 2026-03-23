@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { NewsPanel } from '@/components/news-panel';
 import { useNewsStream } from '@/components/news-display';
-import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail } from 'lucide-react';
+import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp } from 'lucide-react';
 import { getCachedDigest, saveDigestToCache, buildCacheKey } from '@/lib/history-client';
 import type { ThreadEntry } from '@/components/news-display';
 import type { NewsDigest } from '@/components/news-dashboard';
@@ -116,8 +116,10 @@ export function NewsCategoryPanel({
   const [nlSubjectKw, setNlSubjectKw] = useState('');
   const [nlBySource, setNlBySource] = useState(false);
   const [expandedPriorRuns, setExpandedPriorRuns] = useState<Set<number>>(new Set());
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const lastRunParamsRef = useRef<{ cacheKey: string } | null>(null);
   const bodyBottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const searchEvents = events.filter((e) => e.type === 'searching') as { type: 'searching'; query: string }[];
   const modeType = mode === 'curated' || mode === 'research' || mode === 'newsletter' ? 'curated' : mode === 'region' ? 'region' : 'general';
@@ -204,7 +206,7 @@ export function NewsCategoryPanel({
   const latestRun = thread.length > 0 ? thread[thread.length - 1] : null;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
 
       {/* ── Panel header ───────────────────────────────────────────── */}
       <div className="bg-muted/30 border-b px-4 py-3 space-y-1.5 flex-shrink-0">
@@ -455,7 +457,11 @@ export function NewsCategoryPanel({
       )}
 
       {/* ── Panel body ─────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto p-4"
+        onScroll={(e) => setShowScrollTop((e.currentTarget as HTMLDivElement).scrollTop > 300)}
+      >
         {thread.length === 0 && status === 'idle' ? (
           <div className="flex flex-col items-center justify-center h-full text-center py-10 gap-2">
             <Clock className="h-7 w-7 text-muted-foreground opacity-25" />
@@ -553,6 +559,17 @@ export function NewsCategoryPanel({
           </div>
         )}
       </div>
+
+      {/* Floating scroll-to-top button — appears after scrolling 300px */}
+      {showScrollTop && (
+        <button
+          onClick={() => scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+          className="absolute bottom-4 right-4 z-10 flex items-center justify-center w-8 h-8 rounded-full bg-muted border border-border shadow-md hover:bg-muted/80 transition-colors"
+          aria-label="Scroll to top"
+        >
+          <ArrowUp className="h-4 w-4 text-muted-foreground" />
+        </button>
+      )}
     </div>
   );
 }
