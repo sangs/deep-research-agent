@@ -84,17 +84,30 @@ export async function getCachedDigest(cacheKey: string): Promise<NewsDigest | nu
   }
 }
 
-export async function saveDigestToCache(cacheKey: string, digest: NewsDigest): Promise<void> {
+export async function saveDigestToCache(cacheKey: string, digest: NewsDigest, ttlSeconds?: number): Promise<void> {
   const userId = getUserId();
   if (!userId) return;
   try {
     await fetch('/api/history/news', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-      body: JSON.stringify({ cacheKey, digest }),
+      body: JSON.stringify({ cacheKey, digest, ttlSeconds }),
     });
   } catch {
     // ignore save errors silently
+  }
+}
+
+export async function clearCachedDigest(cacheKey: string): Promise<void> {
+  const userId = getUserId();
+  if (!userId) return;
+  try {
+    await fetch(`/api/history/news?key=${encodeURIComponent(cacheKey)}`, {
+      method: 'DELETE',
+      headers: { 'X-User-Id': userId },
+    });
+  } catch {
+    // ignore errors silently
   }
 }
 
@@ -106,4 +119,20 @@ export function buildCacheKey(
   question: string
 ): string {
   return btoa([mode, timeRange, region ?? '', question.trim().toLowerCase()].join('|'));
+}
+
+/** Cache key for Newsletter panel — senders sorted for determinism */
+export function buildNewsletterCacheKey(
+  timeRange: string,
+  senders: string,
+  subjectKw: string,
+  bySource: boolean
+): string {
+  const sortedSenders = senders
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean)
+    .sort()
+    .join(',');
+  return btoa(['newsletter', timeRange, sortedSenders, subjectKw.trim().toLowerCase(), bySource ? '1' : '0'].join('|'));
 }

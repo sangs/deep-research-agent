@@ -7,8 +7,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { NewsPanel } from '@/components/news-panel';
 import { useNewsStream } from '@/components/news-display';
-import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp } from 'lucide-react';
-import { getCachedDigest, saveDigestToCache, buildCacheKey } from '@/lib/history-client';
+import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, LockOpen, RefreshCw } from 'lucide-react';
+import { getCachedDigest, saveDigestToCache, clearCachedDigest, buildCacheKey, buildNewsletterCacheKey } from '@/lib/history-client';
+
+// Newsletter cache rows never expire — Lock/Unlock is the only way to add/remove them.
+// Set to year 2286 (far-future Unix timestamp) so the WHERE expires_at > now() filter always passes.
+const NEWSLETTER_NO_EXPIRY = 9999999999;
 import type { ThreadEntry } from '@/components/news-display';
 import type { NewsDigest } from '@/components/news-dashboard';
 
@@ -115,6 +119,8 @@ export function NewsCategoryPanel({
   const [nlSenders, setNlSenders] = useState('');
   const [nlSubjectKw, setNlSubjectKw] = useState('');
   const [nlBySource, setNlBySource] = useState(false);
+  // True after user clicks Lock this session (resets on filter change or new Run)
+  const [nlSavedToCache, setNlSavedToCache] = useState(false);
   const [expandedPriorRuns, setExpandedPriorRuns] = useState<Set<number>>(new Set());
   const [showScrollTop, setShowScrollTop] = useState(false);
   const lastRunParamsRef = useRef<{ cacheKey: string } | null>(null);
@@ -124,6 +130,19 @@ export function NewsCategoryPanel({
   const searchEvents = events.filter((e) => e.type === 'searching') as { type: 'searching'; query: string }[];
   const modeType = mode === 'curated' || mode === 'research' || mode === 'newsletter' ? 'curated' : mode === 'region' ? 'region' : 'general';
   const latestArticleCount = digest ? articleCount(digest) : 0;
+
+  // Newsletter cache key — recomputed whenever filters change (not stored in state)
+  const nlCacheKey = mode === 'newsletter'
+    ? buildNewsletterCacheKey(timeRange, nlSenders, nlSubjectKw, nlBySource)
+    : null;
+  // Locked = restored from a previously saved cache entry OR locked by the user in this session
+  const nlIsLocked = fromCache || nlSavedToCache;
+
+  // Reset "locked this session" whenever Newsletter filters change
+  useEffect(() => {
+    if (mode === 'newsletter') setNlSavedToCache(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeRange, nlSenders, nlSubjectKw, nlBySource]);
 
   useEffect(() => {
     onStatusChange?.(status, latestArticleCount);
@@ -152,7 +171,13 @@ export function NewsCategoryPanel({
 
   async function handleRun() {
     if (mode === 'newsletter') {
-      // Newsletter uses Gmail directly — no Exa cache
+      setNlSavedToCache(false);
+      // Check cache — serves locked (today) or auto-cached (historical) results instantly
+      const cached = await getCachedDigest(nlCacheKey!);
+      if (cached) {
+        restore(cached);
+        return;
+      }
       run({
         mode: 'newsletter',
         time_range: timeRange,
@@ -183,13 +208,48 @@ export function NewsCategoryPanel({
     });
   }
 
-  // Save digest to cache after a fresh (non-cached) run completes
+  // Save digest to cache after a fresh (non-cached) run completes (non-newsletter tabs)
   useEffect(() => {
-    if (status === 'done' && digest && !fromCache && lastRunParamsRef.current) {
+    if (mode !== 'newsletter' && status === 'done' && digest && !fromCache && lastRunParamsRef.current) {
       saveDigestToCache(lastRunParamsRef.current.cacheKey, digest);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, digest, fromCache]);
+
+  // Newsletter historical ranges: auto-save after every fresh run (no-expiry — permanent until Re-run fresh)
+  useEffect(() => {
+    if (
+      mode === 'newsletter' &&
+      status === 'done' &&
+      digest &&
+      !fromCache &&
+      timeRange !== 'today' &&
+      nlCacheKey
+    ) {
+      saveDigestToCache(nlCacheKey, digest, NEWSLETTER_NO_EXPIRY);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, digest, fromCache]);
+
+  async function handleNlLock() {
+    if (!nlCacheKey || !digest) return;
+    await saveDigestToCache(nlCacheKey, digest, NEWSLETTER_NO_EXPIRY);
+    setNlSavedToCache(true);
+  }
+
+  async function handleNlUnlockAndRefresh() {
+    if (!nlCacheKey) return;
+    await clearCachedDigest(nlCacheKey);
+    setNlSavedToCache(false);
+    reset();
+    run({
+      mode: 'newsletter',
+      time_range: timeRange,
+      newsletter_senders: nlSenders.trim() || undefined,
+      newsletter_subject_kw: nlSubjectKw.trim() || undefined,
+      newsletter_by_source: nlBySource,
+    });
+  }
 
   const placeholder_text =
     mode === 'curated'
@@ -367,6 +427,41 @@ export function NewsCategoryPanel({
               </Button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ── Newsletter cache control bar ─────────────────────────── */}
+      {mode === 'newsletter' && status === 'done' && latestRun && latestRun.digest.topics.length > 0 && nlCacheKey && (
+        <div className="border-b px-4 py-2 flex items-center gap-3 bg-muted/10 flex-shrink-0">
+          {timeRange === 'today' ? (
+            nlIsLocked ? (
+              <>
+                <span className="text-xs text-primary flex items-center gap-1">
+                  <Lock className="h-3 w-3" /> Digest locked for today
+                </span>
+                <button
+                  onClick={handleNlUnlockAndRefresh}
+                  className="text-xs text-muted-foreground hover:text-destructive flex items-center gap-1 transition-colors ml-auto"
+                >
+                  <LockOpen className="h-3 w-3" /> Unlock &amp; re-run
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={handleNlLock}
+                className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors"
+              >
+                <Lock className="h-3 w-3" /> Lock digest for today
+              </button>
+            )
+          ) : (
+            <button
+              onClick={handleNlUnlockAndRefresh}
+              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors ml-auto"
+            >
+              <RefreshCw className="h-3 w-3" /> Re-run fresh
+            </button>
+          )}
         </div>
       )}
 
