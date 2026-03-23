@@ -65,3 +65,13 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ ok: true });
 }
+
+// DELETE /api/history/research — delete ALL sessions for this user (bulk clear)
+export async function DELETE(req: NextRequest) {
+  const userId = getUserId(req);
+  if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
+
+  await db.delete(researchSessions).where(eq(researchSessions.userId, userId));
+
+  return NextResponse.json({ ok: true });
+}

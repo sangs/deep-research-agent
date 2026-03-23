@@ -12,6 +12,7 @@ import {
   listResearchSessions,
   loadResearchSession,
   deleteResearchSession,
+  clearAllResearchSessions,
   type SessionMeta,
 } from '@/lib/history-client';
 
@@ -67,6 +68,13 @@ export default function Home() {
     setSessionId(crypto.randomUUID());
   }
 
+  async function handleClearAllSessions() {
+    await clearAllResearchSessions();
+    setSessions([]);
+    setInitialMessages([]);
+    setSessionId(crypto.randomUUID());
+  }
+
   return (
     <>
       {/* History button — only shown in research section */}
@@ -92,6 +100,7 @@ export default function Home() {
         onSelectSession={handleSelectSession}
         onDeleteSession={handleDeleteSession}
         onNewSession={handleNewSession}
+        onClearAll={handleClearAllSessions}
       />
 
       <div className={section === 'research' ? '' : 'hidden'}>
