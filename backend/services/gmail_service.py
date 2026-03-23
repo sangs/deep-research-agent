@@ -153,8 +153,10 @@ def get_gmail_service():
                 flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
             else:
                 raise FileNotFoundError(
-                    'Gmail credentials not found. Set GMAIL_CREDENTIALS_JSON env var (production) '
-                    f'or place credentials.json at {creds_path} (local dev).'
+                    'Gmail token not found. '
+                    'On Railway: set the GMAIL_TOKEN_JSON environment variable '
+                    '(copy ~/gmail_token.json contents from your local machine). '
+                    f'On local dev: place gmail_token.json at {token_path} and run the one-time OAuth flow.'
                 )
             creds = flow.run_local_server(port=0)
             token_path.write_text(creds.to_json())
