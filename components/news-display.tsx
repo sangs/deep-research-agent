@@ -109,6 +109,9 @@ export function useNewsStream() {
     // Track the digest that arrives during this run so we can append it to the
     // thread on completion (keeping previous entries visible during loading).
     let newDigest: NewsDigest | null = null;
+    // If an error event arrives, suppress appending the (empty) digest to the thread
+    // so the error message remains visible rather than showing "No results found".
+    let hadError = false;
 
     try {
       const res = await fetch('/api/news', {
@@ -142,11 +145,12 @@ export function useNewsStream() {
               const event = JSON.parse(raw) as NewsStreamEvent;
 
               if (event.type === 'done') {
-                if (newDigest) {
+                if (newDigest && !hadError) {
                   _appendToThread({ question: request.question, digest: newDigest, fromCache: false });
                 }
-                setStatus('done');
+                setStatus(hadError ? 'error' : 'done');
               } else if (event.type === 'error') {
+                hadError = true;
                 setErrorMsg(event.message);
                 setStatus('error');
               } else if (event.type === 'digest') {
