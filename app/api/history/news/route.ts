@@ -43,11 +43,13 @@ export async function POST(req: NextRequest) {
   const userId = getUserId(req);
   if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
 
-  const { cacheKey, digest } = await req.json();
+  const { cacheKey, digest, ttlSeconds } = await req.json();
   if (!cacheKey || !digest) {
     return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
   }
 
+  // Caller can pass ttlSeconds to override the default (e.g. Newsletter uses no-expiry value)
+  const effectiveTtl = typeof ttlSeconds === 'number' ? ttlSeconds : DIGEST_TTL_SECONDS;
   const now = Math.floor(Date.now() / 1000);
   const id = crypto.randomUUID();
 
@@ -60,14 +62,14 @@ export async function POST(req: NextRequest) {
       cacheKey,
       digest: JSON.stringify(digest),
       generatedAt: now,
-      expiresAt: now + DIGEST_TTL_SECONDS,
+      expiresAt: now + effectiveTtl,
     })
     .onConflictDoUpdate({
       target: newsDigests.cacheKey,
       set: {
         digest: JSON.stringify(digest),
         generatedAt: now,
-        expiresAt: now + DIGEST_TTL_SECONDS,
+        expiresAt: now + effectiveTtl,
       },
     });
 
