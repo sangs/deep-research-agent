@@ -60,6 +60,15 @@ export async function deleteResearchSession(id: string): Promise<void> {
   });
 }
 
+export async function clearAllResearchSessions(): Promise<void> {
+  const userId = getUserId();
+  if (!userId) return;
+  await fetch('/api/history/research', {
+    method: 'DELETE',
+    headers: { 'X-User-Id': userId },
+  });
+}
+
 export async function getCachedDigest(cacheKey: string): Promise<NewsDigest | null> {
   const userId = getUserId();
   if (!userId) return null;

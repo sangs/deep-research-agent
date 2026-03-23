@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { X, Trash2, Clock, Plus } from 'lucide-react';
@@ -14,6 +14,7 @@ interface HistoryDrawerProps {
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   onNewSession: () => void;
+  onClearAll: () => void;
 }
 
 function formatRelativeTime(unixSeconds: number): string {
@@ -36,8 +37,15 @@ export function HistoryDrawer({
   onSelectSession,
   onDeleteSession,
   onNewSession,
+  onClearAll,
 }: HistoryDrawerProps) {
   const drawerRef = useRef<HTMLDivElement>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  // Reset confirm state when drawer closes
+  useEffect(() => {
+    if (!open) setConfirmClear(false);
+  }, [open]);
 
   // Close on outside click
   useEffect(() => {
@@ -108,7 +116,7 @@ export function HistoryDrawer({
         </div>
 
         {/* Session list */}
-        <div className="flex-1 overflow-y-auto py-1">
+        <div className="flex-1 overflow-y-auto py-1 min-h-0">
           {sessions.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-32 text-center px-4">
               <Clock className="h-6 w-6 text-muted-foreground/30 mb-2" />
@@ -152,6 +160,35 @@ export function HistoryDrawer({
             ))
           )}
         </div>
+        {/* Footer — clear all */}
+        {sessions.length > 0 && (
+          <div className="px-3 py-2 border-t flex-shrink-0">
+            {confirmClear ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground flex-1">Delete all sessions?</span>
+                <button
+                  onClick={() => setConfirmClear(false)}
+                  className="text-xs text-muted-foreground hover:text-foreground px-2 py-1"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => { onClearAll(); setConfirmClear(false); }}
+                  className="text-xs text-destructive hover:text-destructive/80 font-medium px-2 py-1"
+                >
+                  Delete all
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmClear(true)}
+                className="w-full text-xs text-muted-foreground hover:text-destructive transition-colors text-left py-1"
+              >
+                Clear all history…
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </>
   );

@@ -3,7 +3,9 @@ import { db } from '@/drizzle/db';
 import { newsDigests } from '@/drizzle/schema';
 import { eq, and, gt } from 'drizzle-orm';
 
-const DIGEST_TTL_SECONDS = 3600; // 1 hour
+// Override with NEWS_DIGEST_TTL_SECONDS env var (in Vercel or .env.local). Default: 1 hour.
+// Note: changing this only affects new saves — existing cached rows keep their original expires_at.
+const DIGEST_TTL_SECONDS = parseInt(process.env.NEWS_DIGEST_TTL_SECONDS ?? '3600', 10);
 
 function getUserId(req: NextRequest): string | null {
   return req.headers.get('X-User-Id');
@@ -68,6 +70,21 @@ export async function POST(req: NextRequest) {
         expiresAt: now + DIGEST_TTL_SECONDS,
       },
     });
+
+  return NextResponse.json({ ok: true });
+}
+
+// DELETE /api/history/news?key=... — remove a cached digest (Newsletter unlock / force-refresh)
+export async function DELETE(req: NextRequest) {
+  const userId = getUserId(req);
+  if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
+
+  const cacheKey = req.nextUrl.searchParams.get('key');
+  if (!cacheKey) return NextResponse.json({ error: 'Missing key' }, { status: 400 });
+
+  await db
+    .delete(newsDigests)
+    .where(and(eq(newsDigests.cacheKey, cacheKey), eq(newsDigests.userId, userId)));
 
   return NextResponse.json({ ok: true });
 }
