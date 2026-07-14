@@ -18,6 +18,7 @@ export interface ArticleItem {
 interface NewsCardProps {
   article: ArticleItem;
   mode?: 'general' | 'curated' | 'region';
+  id?: string;
 }
 
 function formatDate(dateStr: string | null): string | null {
@@ -44,7 +45,7 @@ const sourceChip: Record<string, string> = {
   region:  'bg-orange-500/10 text-orange-400 border-orange-500/20',
 };
 
-function renderExcerpt(text: string) {
+export function renderExcerpt(text: string) {
   // Detect structured format: **headline** + bullet lines
   const headlineMatch = text.match(/^\*\*(.+?)\*\*/);
   const bulletLines = text.split('\n').filter(l => l.trim().startsWith('•'));
@@ -59,7 +60,7 @@ function renderExcerpt(text: string) {
         {bulletLines.length > 0 && (
           <ul className="space-y-1">
             {bulletLines.map((line, i) => (
-              <li key={i} className="text-xs text-muted-foreground leading-relaxed flex gap-1.5">
+              <li key={i} className="text-xs text-foreground/85 leading-relaxed flex gap-1.5">
                 <span className="mt-0.5 shrink-0">•</span>
                 <span>{line.replace(/^•\s*/, '')}</span>
               </li>
@@ -70,10 +71,10 @@ function renderExcerpt(text: string) {
     );
   }
 
-  return <p className="text-xs text-muted-foreground leading-relaxed">{text}</p>;
+  return <p className="text-xs text-foreground/85 leading-relaxed">{text}</p>;
 }
 
-export function NewsCard({ article, mode = 'general' }: NewsCardProps) {
+export function NewsCard({ article, mode = 'general', id }: NewsCardProps) {
   const [open, setOpen] = useState(false);
   const date = formatDate(article.published_date);
   const accent = modeAccent[mode] ?? modeAccent.general;
@@ -82,16 +83,22 @@ export function NewsCard({ article, mode = 'general' }: NewsCardProps) {
 
   return (
     <>
-      <Card className={`h-full border-l-2 ${accent} hover:shadow-lg hover:shadow-primary/5 transition-all duration-200 bg-card/80`}>
+      <Card id={id} className={`h-full border-l-2 ${accent} hover:shadow-lg hover:shadow-primary/5 transition-all duration-200 bg-card/80`}>
         <CardHeader className="pb-2 space-y-1.5">
-          <a
-            href={article.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[15px] font-semibold leading-snug hover:text-primary transition-colors line-clamp-2"
-          >
-            {article.title}
-          </a>
+          {article.url ? (
+            <a
+              href={article.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[15px] font-semibold leading-snug hover:text-primary transition-colors line-clamp-2"
+            >
+              {article.title}
+            </a>
+          ) : (
+            <span className="text-[15px] font-semibold leading-snug line-clamp-2">
+              {article.title}
+            </span>
+          )}
           <div className="flex items-center gap-1.5 flex-wrap">
             <Badge className={`text-[10px] font-medium border px-1.5 py-0 h-4 ${chip}`}>
               {article.source}
@@ -105,7 +112,7 @@ export function NewsCard({ article, mode = 'general' }: NewsCardProps) {
           className="pt-0 cursor-pointer hover:bg-muted/40 transition-colors rounded-b-lg"
           onClick={() => setOpen(true)}
         >
-          <p className="text-xs text-muted-foreground leading-relaxed line-clamp-3">
+          <p className="text-xs text-foreground/85 leading-relaxed line-clamp-3">
             {article.excerpt}
           </p>
         </CardContent>

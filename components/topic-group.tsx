@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { NewsCard, type ArticleItem } from '@/components/news-card';
@@ -14,17 +13,17 @@ export interface TopicCluster {
 interface TopicGroupProps {
   cluster: TopicCluster;
   mode?: 'general' | 'curated' | 'region';
-  defaultOpen?: boolean;
   id?: string;
+  groupIndex: number;
+  open: boolean;
+  onToggle: () => void;
 }
 
-export function TopicGroup({ cluster, mode = 'general', defaultOpen = true, id }: TopicGroupProps) {
-  const [open, setOpen] = useState(defaultOpen);
-
+export function TopicGroup({ cluster, mode = 'general', id, groupIndex, open, onToggle }: TopicGroupProps) {
   return (
     <div id={id} className="border rounded-lg overflow-hidden">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={onToggle}
         className="w-full flex items-center justify-between px-4 py-3 bg-muted/50 hover:bg-muted transition-colors text-left"
       >
         <div className="flex items-center gap-2">
@@ -44,7 +43,12 @@ export function TopicGroup({ cluster, mode = 'general', defaultOpen = true, id }
         <div className="p-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {cluster.articles.map((article, i) => (
-              <NewsCard key={`${article.url}-${i}`} article={article} mode={mode} />
+              <NewsCard
+                key={`${article.url}-${i}`}
+                article={article}
+                mode={mode}
+                id={`card-${groupIndex}-${i}`}
+              />
             ))}
           </div>
         </div>

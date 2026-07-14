@@ -13,7 +13,7 @@ npx tsc --noEmit # Type check only
 npx shadcn@latest add <component>  # Add a new shadcn/ui component
 
 # Backend
-cd backend && poetry run uvicorn main:app --reload  # Start FastMCP + Starlette backend (http://localhost:8000)
+cd backend && uv run uvicorn main:app --reload  # Start FastMCP + Starlette backend (http://localhost:8000)
 ```
 
 Both servers must be running for the full app to work. There are no tests in this project.
