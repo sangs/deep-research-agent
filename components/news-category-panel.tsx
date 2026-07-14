@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { NewsPanel } from '@/components/news-panel';
+import { NewsletterDigestView } from '@/components/newsletter-digest-view';
 import { useNewsStream } from '@/components/news-display';
 import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, LockOpen, RefreshCw } from 'lucide-react';
 import { getCachedDigest, saveDigestToCache, clearCachedDigest, buildCacheKey, buildNewsletterCacheKey } from '@/lib/history-client';
@@ -629,6 +630,8 @@ export function NewsCategoryPanel({
                         : 'No articles found for this query and time range.'}
                     </p>
                   </div>
+                ) : mode === 'newsletter' ? (
+                  <NewsletterDigestView topics={latestRun.digest.topics} />
                 ) : (
                   <NewsPanel topics={latestRun.digest.topics} mode={modeType} />
                 )}

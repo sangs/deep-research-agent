@@ -57,7 +57,7 @@ export function NewsDashboard({ digest }: NewsDashboardProps) {
           <TabsTrigger value="main">{tabLabel}</TabsTrigger>
         </TabsList>
         <TabsContent value="main" className="mt-4">
-          <NewsPanel topics={digest.topics} mode={modeType} />
+          <NewsPanel key={digest.generated_at} topics={digest.topics} mode={modeType} />
         </TabsContent>
       </Tabs>
     </div>

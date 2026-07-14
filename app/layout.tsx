@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { DM_Serif_Display, Plus_Jakarta_Sans, Geist_Mono } from "next/font/google";
 import { NavLinks } from "@/components/nav-links";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { SectionProvider } from "@/context/section-context";
 import "./globals.css";
 
@@ -32,7 +33,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){var t=localStorage.getItem('theme');if(t==='light'){document.documentElement.classList.remove('dark');}else{document.documentElement.classList.add('dark');}})();`,
+          }}
+        />
+      </head>
       <body
         className={`${dmSerifDisplay.variable} ${plusJakartaSans.variable} ${geistMono.variable} antialiased min-h-screen`}
       >
@@ -49,7 +57,10 @@ export default function RootLayout({
               <span className="text-muted-foreground/50 text-xs hidden sm:block">·</span>
               <span className="text-muted-foreground text-xs hidden sm:block">Intelligence Platform</span>
             </div>
-            <NavLinks />
+            <div className="flex items-center gap-1">
+              <NavLinks />
+              <ThemeToggle />
+            </div>
           </nav>
           {children}
         </SectionProvider>
