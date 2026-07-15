@@ -15,7 +15,7 @@ from tools.news_tools import load_sources, REGION_KEYWORDS
 load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '')
-MODEL = 'google/gemini-2.0-flash-001'
+MODEL = '~google/gemini-flash-latest'
 
 # OpenAI-compatible tool schemas for Exa tools (A, B, C)
 _MODE_TOOL = {

@@ -28,7 +28,7 @@ Then follow with the full structured report using headings and citations.`;
 export async function POST(req: Request): Promise<Response> {
   const { messages }: { messages: UIMessage[] } = await req.json();
   const result = streamText({
-    model: openrouter.chat('google/gemini-2.0-flash-001'),
+    model: openrouter.chat('~google/gemini-flash-latest'),
     system: SYSTEM_PROMPT,
     messages: await convertToModelMessages(messages),
     tools: { webSearch: webSearchTool },

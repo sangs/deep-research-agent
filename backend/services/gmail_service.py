@@ -55,7 +55,7 @@ from tools.news_tools import load_sources
 load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '')
-MODEL = 'google/gemini-2.0-flash-001'
+MODEL = '~google/gemini-flash-latest'
 
 # Gmail label constants
 DIGESTED_LABEL = 'gmail-ai-digested'   # applied to every matched email

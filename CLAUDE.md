@@ -69,7 +69,7 @@ components/source-manager.tsx
 
 ### Frontend
 - `app/page.tsx` — Dual-section layout. `DefaultChatTransport` created outside component to avoid re-renders.
-- `app/api/research/route.ts` — Deep Research agentic loop. Uses `streamText` with `stopWhen: stepCountIs(10)`. Model: `google/gemini-2.0-flash-001` via OpenRouter.
+- `app/api/research/route.ts` — Deep Research agentic loop. Uses `streamText` with `stopWhen: stepCountIs(10)`. Model: `~google/gemini-flash-latest` via OpenRouter.
 - `app/api/news/route.ts` — Proxies News Hub requests to the FastMCP + Starlette backend.
 - `app/api/sources/route.ts` — Proxies source CRUD to the FastMCP + Starlette backend.
 - `lib/tools.ts` — Exa `webSearchTool`. Registered as `webSearch` server-side; client part type is `tool-webSearch`.
@@ -112,10 +112,10 @@ OpenRouter does not support the OpenAI Responses API (`/v1/responses`). The defa
 
 ```ts
 // ❌ Wrong — uses Responses API, fails on OpenRouter
-model: openrouter('google/gemini-2.0-flash-001')
+model: openrouter('~google/gemini-flash-latest')
 
 // ✅ Correct — uses Chat Completions
-model: openrouter.chat('google/gemini-2.0-flash-001')
+model: openrouter.chat('~google/gemini-flash-latest')
 ```
 
 ## shadcn/ui
