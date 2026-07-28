@@ -53,11 +53,10 @@ export default function RootLayout({
               >
                 <span className="text-primary-foreground text-[10px] font-bold tracking-widest">AI</span>
               </div>
-              <span className="font-semibold text-sm tracking-tight">Research Suite</span>
-              <span className="text-muted-foreground/50 text-xs hidden sm:block">·</span>
-              <span className="text-muted-foreground text-xs hidden sm:block">Intelligence Platform</span>
+              <span className="font-semibold text-base sm:text-lg tracking-tight">Intelligence Platform</span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-2">
+              <span className="hidden sm:inline text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Research Suite</span>
               <NavLinks />
               <ThemeToggle />
             </div>
