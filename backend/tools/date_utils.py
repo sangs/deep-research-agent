@@ -1,8 +1,13 @@
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-def resolve_date_range(time_range: str) -> dict[str, str]:
-    now = datetime.now(timezone.utc)
+def resolve_date_range(time_range: str, tz_name: str = 'UTC') -> dict[str, str]:
+    try:
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = timezone.utc
+    now = datetime.now(tz)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     match time_range:
         case 'today':

@@ -41,6 +41,7 @@ async def digest_endpoint(request: Request) -> Response:
     custom_domains = body.get('custom_domains') or None
     question = body.get('question') or None
     conversation_history = body.get('conversation_history') or None
+    tz_name = body.get('timezone') or 'UTC'
 
     # Newsletter-specific params (only used when mode == 'newsletter')
     newsletter_senders   = [s.strip() for s in (body.get('newsletter_senders') or '').split(',') if s.strip()]
@@ -62,6 +63,7 @@ async def digest_endpoint(request: Request) -> Response:
                     subject_kw=newsletter_subject,
                     by_source=newsletter_by_source,
                     emit_event=emit,
+                    tz_name=tz_name,
                 )
             else:
                 from services.openrouter import run_news_agent
@@ -73,6 +75,7 @@ async def digest_endpoint(request: Request) -> Response:
                     question=question,
                     conversation_history=conversation_history,
                     emit_event=emit,
+                    tz_name=tz_name,
                 )
 
             # Yield all accumulated search-progress events first

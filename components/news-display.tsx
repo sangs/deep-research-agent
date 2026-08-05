@@ -102,9 +102,14 @@ export function useNewsStream() {
       topics: entry.digest.topics.map(t => t.label),
     }));
 
+    // IANA timezone (e.g. 'America/Los_Angeles') so the backend can resolve
+    // 'today'/'yesterday' day boundaries to the user's local calendar day
+    // instead of UTC — see date_utils.resolve_date_range.
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
     const fullRequest = conversation_history.length > 0
-      ? { ...request, conversation_history }
-      : request;
+      ? { ...request, timezone, conversation_history }
+      : { ...request, timezone };
 
     // Track the digest that arrives during this run so we can append it to the
     // thread on completion (keeping previous entries visible during loading).

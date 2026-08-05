@@ -44,6 +44,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable, Awaitable
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from dotenv import load_dotenv
@@ -246,10 +247,22 @@ def sender_display(from_header: str) -> str:
     return from_header.strip()
 
 
-def format_date(raw: str) -> str:
-    """Parse an RFC 2822 date header into a readable string."""
+def format_date(raw: str, tz_name: str = 'UTC') -> str:
+    """Parse an RFC 2822 date header and format it in the reader's timezone.
+
+    The header carries whatever UTC offset the *sender* stamped on it (often
+    a digest's composition time, e.g. late the previous evening, rather than
+    the reader's actual delivery day) — converting to tz_name before
+    formatting keeps the displayed date aligned with the reader's local
+    calendar day instead of leaking the sender's.
+    """
     try:
-        return parsedate_to_datetime(raw).strftime('%Y-%m-%d')
+        dt = parsedate_to_datetime(raw)
+        try:
+            tz = ZoneInfo(tz_name)
+        except (ZoneInfoNotFoundError, ValueError):
+            tz = timezone.utc
+        return dt.astimezone(tz).strftime('%Y-%m-%d')
     except Exception:
         return raw
 
@@ -548,6 +561,7 @@ def _build_newsletter_digest(
     cluster_names: list[str],
     summaries: dict[int, str],
     time_range: str,
+    tz_name: str = 'UTC',
 ) -> NewsDigest:
     """Convert clustered + summarized emails into a NewsDigest."""
     topics: list[TopicCluster] = []
@@ -574,7 +588,7 @@ def _build_newsletter_digest(
                 title          = e['subject'],
                 url            = url,
                 source         = sender_display(e['from']),
-                published_date = format_date(e['date']),
+                published_date = format_date(e['date'], tz_name),
                 excerpt        = excerpt,
                 links          = deduped_links,
             ))
@@ -604,6 +618,7 @@ async def run_gmail_digest(
     subject_kw: str | None,
     by_source: bool,
     emit_event: Callable[[dict], Awaitable[None]] | None,
+    tz_name: str = 'UTC',
 ) -> NewsDigest:
     """Fetch, cluster, and summarize Gmail newsletter emails into a NewsDigest.
 
@@ -613,11 +628,13 @@ async def run_gmail_digest(
         subject_kw:  Optional keyword to filter by subject line.
         by_source:   If True, group emails by sender instead of LLM topic clusters.
         emit_event:  Async callback for streaming search-progress events to the UI.
+        tz_name:     IANA timezone name (e.g. 'America/Los_Angeles') used to resolve
+                     'today'/'yesterday' day boundaries to the user's local calendar day.
 
     Returns:
         NewsDigest with mode='newsletter', topics populated from email clusters.
     """
-    dates      = resolve_date_range(time_range)
+    dates      = resolve_date_range(time_range, tz_name)
     start_iso  = dates['start']
     end_iso    = dates['end']
 
@@ -698,4 +715,4 @@ async def run_gmail_digest(
     summaries = await _summarize_via_openrouter(emails)
 
     # ── Step 6: Assemble digest ──────────────────────────────────────────────
-    return _build_newsletter_digest(emails, clusters, cluster_names, summaries, time_range)
+    return _build_newsletter_digest(emails, clusters, cluster_names, summaries, time_range, tz_name)
