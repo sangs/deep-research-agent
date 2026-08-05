@@ -5,17 +5,9 @@ import { Badge } from '@/components/ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { ExternalLink } from 'lucide-react';
 import { renderExcerpt } from '@/components/news-card';
+import { formatBareDate } from '@/lib/date-utils';
 import type { TopicCluster } from '@/components/topic-group';
 import type { ArticleItem } from '@/components/news-card';
-
-function formatDate(dateStr: string | null): string | null {
-  if (!dateStr) return null;
-  try {
-    return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  } catch {
-    return null;
-  }
-}
 
 interface OpenArticle {
   article: ArticleItem;
@@ -94,7 +86,7 @@ export function NewsletterDigestView({ topics }: NewsletterDigestViewProps) {
 
             {/* Article rows */}
             {articles.map(({ article, num }) => {
-              const date = formatDate(article.published_date);
+              const date = formatBareDate(article.published_date);
               return (
                 <div
                   key={num}
@@ -156,9 +148,9 @@ export function NewsletterDigestView({ topics }: NewsletterDigestViewProps) {
                   <Badge className={`text-[10px] font-medium border px-1.5 py-0 h-4 ${chip}`}>
                     {openArticle.article.source}
                   </Badge>
-                  {formatDate(openArticle.article.published_date) && (
+                  {formatBareDate(openArticle.article.published_date) && (
                     <span className="text-[10px] text-muted-foreground tabular-nums">
-                      {formatDate(openArticle.article.published_date)}
+                      {formatBareDate(openArticle.article.published_date)}
                     </span>
                   )}
                 </div>

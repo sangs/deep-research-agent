@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { NewsDashboard, type NewsDigest } from '@/components/news-dashboard';
 import { Search, FileText, AlertCircle } from 'lucide-react';
+import { getBrowserTimezone } from '@/lib/date-utils';
 
 type NewsStreamEvent =
   | { type: 'searching'; query: string }
@@ -105,7 +106,7 @@ export function useNewsStream() {
     // IANA timezone (e.g. 'America/Los_Angeles') so the backend can resolve
     // 'today'/'yesterday' day boundaries to the user's local calendar day
     // instead of UTC — see date_utils.resolve_date_range.
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const timezone = getBrowserTimezone();
 
     const fullRequest = conversation_history.length > 0
       ? { ...request, timezone, conversation_history }

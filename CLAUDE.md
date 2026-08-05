@@ -82,16 +82,21 @@ components/source-manager.tsx
 - `components/nav-links.tsx` — Top nav bar (Deep Research | News Hub).
 - `context/section-context.tsx` — Shared React context for active section state.
 - `lib/excerpt-utils.ts` — Text truncation helpers for article excerpts.
+- `lib/date-utils.ts` — Centralized date/time formatting, cache-key date resolution, and browser-timezone lookup; components import from here rather than defining local `formatDate`/`formatTimestamp`/etc. helpers.
 
 ### Backend (`backend/`)
 - `main.py` — FastMCP server + Starlette app. Routes: `POST /digest`, `GET/POST /sources`, `Mount /mcp` (MCP HTTP interface).
 - `services/exa_client.py` — Exa search + contents fetching, with region and time range support.
 - `services/openrouter.py` — LLM calls via OpenRouter for topic clustering / summarisation.
 - `tools/news_tools.py` — Orchestrates multi-query news fetching and cluster grouping.
-- `tools/date_utils.py` — Converts time range labels (today/yesterday/past week/past month) to date filters.
+- `tools/date_utils.py` — Converts time range labels (today/yesterday/past week/past month) to timezone-aware date filters (`resolve_date_range`). Also houses `resolve_tz` (shared IANA-timezone-with-UTC-fallback resolver), `format_header_date` (RFC 2822 email header → reader-timezone `YYYY-MM-DD`), and `now_iso()` (current-instant timestamp helper) — the single home for all backend date/time logic.
 - `models/schemas.py` — Pydantic request/response models. `ArticleItem` includes `links: list[str] = []` (newsletter-only; safe default for other tabs).
 - `services/gmail_service.py` — Gmail OAuth + newsletter digest. Fetches emails, clusters by topic via LLM, summarizes with structured headline+bullets format, and populates `links` with up to 5 deduplicated article URLs per email.
 - `config/default_sources.json` — Default curated source domains for Blogs & Sites and Research tabs.
+
+## Code Conventions
+
+- **No duplicated logic.** If the same behavior (parsing, formatting, validation, etc.) is needed in more than one file, extract it into a named, exported function in a shared module and have every call site import it — never copy-paste a function body across files. `lib/date-utils.ts` (frontend) and `backend/tools/date_utils.py` (backend) are the canonical homes for date/time logic specifically — check both before adding a new date/time helper anywhere else.
 
 ## AI SDK v6 Patterns
 

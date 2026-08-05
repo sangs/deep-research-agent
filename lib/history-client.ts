@@ -1,4 +1,5 @@
 import { getUserId } from './user-id';
+import { resolveTimeRangeStart } from './date-utils';
 import type { NewsDigest } from '@/components/news-dashboard';
 
 export interface SessionMeta {
@@ -119,41 +120,6 @@ export function buildCacheKey(
   question: string
 ): string {
   return btoa([mode, timeRange, region ?? '', question.trim().toLowerCase()].join('|'));
-}
-
-/**
- * Resolve a timeRange label to its actual start date (YYYY-MM-DD).
- * Mirrors backend/tools/date_utils.py resolve_date_range() so cache keys
- * are anchored to real calendar dates, not relative label strings.
- *
- * Without this, "yesterday" on 2026-03-31 and "yesterday" on 2026-03-30
- * would produce the same cache key despite covering different date ranges.
- */
-function resolveTimeRangeStart(timeRange: string): string {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // midnight local
-  let start: Date;
-  switch (timeRange) {
-    case 'today':
-      start = today;
-      break;
-    case 'yesterday':
-      start = new Date(today);
-      start.setDate(today.getDate() - 1);
-      break;
-    case 'week':
-      start = new Date(today);
-      start.setDate(today.getDate() - 7);
-      break;
-    case 'month':
-      start = new Date(today);
-      start.setDate(today.getDate() - 30);
-      break;
-    default:
-      start = new Date(today);
-      start.setDate(today.getDate() - 7);
-  }
-  return start.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
 /** Cache key for Newsletter panel — uses resolved start date so the key is
