@@ -1,14 +1,13 @@
 import json
 import os
 import re
-from datetime import datetime, timezone
 from typing import Callable, Awaitable, Any
 
 import httpx
 from dotenv import load_dotenv
 
 from models.schemas import NewsDigest, TopicCluster, ArticleItem
-from tools.date_utils import resolve_date_range
+from tools.date_utils import resolve_date_range, now_iso
 from services.exa_client import search_news
 from tools.news_tools import load_sources, REGION_KEYWORDS
 
@@ -348,7 +347,7 @@ def _assemble_digest(
         mode=raw_json.get('mode', mode),
         time_range=raw_json.get('time_range', time_range),
         region=raw_json.get('region', region),
-        generated_at=raw_json.get('generated_at') or datetime.now(timezone.utc).isoformat(),
+        generated_at=raw_json.get('generated_at') or now_iso(),
         topics=topics,
     )
 
@@ -365,7 +364,7 @@ def _fallback_digest_from_pool(
             mode=mode,
             time_range=time_range,
             region=region,
-            generated_at=datetime.now(timezone.utc).isoformat(),
+            generated_at=now_iso(),
             topics=[],
         )
     articles = [
@@ -385,7 +384,7 @@ def _fallback_digest_from_pool(
         mode=mode,
         time_range=time_range,
         region=region,
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=now_iso(),
         topics=[topic] if articles else [],
     )
 
@@ -513,7 +512,7 @@ async def run_news_agent(
                 try:
                     digest_data = json.loads(raw)
                     if 'generated_at' not in digest_data:
-                        digest_data['generated_at'] = datetime.now(timezone.utc).isoformat()
+                        digest_data['generated_at'] = now_iso()
                     digest = _assemble_digest(digest_data, article_pool, mode, time_range, region)
                     # If LLM JSON had no matching IDs but we fetched articles, fall back (Bug 3 fix).
                     if not digest.topics and article_pool:

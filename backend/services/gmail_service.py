@@ -40,17 +40,15 @@ import os
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable, Awaitable
 from urllib.parse import urlparse
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from dotenv import load_dotenv
 
 from models.schemas import NewsDigest, TopicCluster, ArticleItem
-from tools.date_utils import resolve_date_range
+from tools.date_utils import resolve_date_range, format_header_date, now_iso
 from tools.news_tools import load_sources
 
 load_dotenv()
@@ -245,26 +243,6 @@ def sender_display(from_header: str) -> str:
     if m2:
         return m2.group(1).strip()
     return from_header.strip()
-
-
-def format_date(raw: str, tz_name: str = 'UTC') -> str:
-    """Parse an RFC 2822 date header and format it in the reader's timezone.
-
-    The header carries whatever UTC offset the *sender* stamped on it (often
-    a digest's composition time, e.g. late the previous evening, rather than
-    the reader's actual delivery day) — converting to tz_name before
-    formatting keeps the displayed date aligned with the reader's local
-    calendar day instead of leaking the sender's.
-    """
-    try:
-        dt = parsedate_to_datetime(raw)
-        try:
-            tz = ZoneInfo(tz_name)
-        except (ZoneInfoNotFoundError, ValueError):
-            tz = timezone.utc
-        return dt.astimezone(tz).strftime('%Y-%m-%d')
-    except Exception:
-        return raw
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -588,7 +566,7 @@ def _build_newsletter_digest(
                 title          = e['subject'],
                 url            = url,
                 source         = sender_display(e['from']),
-                published_date = format_date(e['date'], tz_name),
+                published_date = format_header_date(e['date'], tz_name),
                 excerpt        = excerpt,
                 links          = deduped_links,
             ))
@@ -603,7 +581,7 @@ def _build_newsletter_digest(
         mode         = 'newsletter',
         time_range   = time_range,
         region       = None,
-        generated_at = datetime.now(timezone.utc).isoformat(),
+        generated_at = now_iso(),
         topics       = topics,
     )
 
@@ -642,7 +620,7 @@ async def run_gmail_digest(
         mode='newsletter',
         time_range=time_range,
         region=None,
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=now_iso(),
         topics=[],
     )
 

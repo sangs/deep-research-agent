@@ -1,5 +1,6 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { NewsPanel } from '@/components/news-panel';
+import { formatIsoDateTime } from '@/lib/date-utils';
 import type { TopicCluster } from '@/components/topic-group';
 
 export interface NewsDigest {
@@ -26,19 +27,6 @@ function getModeType(mode: string): 'general' | 'curated' | 'region' {
   return 'general';
 }
 
-function formatTimestamp(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return iso;
-  }
-}
-
 export function NewsDashboard({ digest }: NewsDashboardProps) {
   const tabLabel = getTabLabel(digest);
   const modeType = getModeType(digest.mode);
@@ -48,7 +36,7 @@ export function NewsDashboard({ digest }: NewsDashboardProps) {
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground">
           {digest.topics.reduce((sum, t) => sum + t.article_count, 0)} articles across{' '}
-          {digest.topics.length} topics · Generated {formatTimestamp(digest.generated_at)}
+          {digest.topics.length} topics · Generated {formatIsoDateTime(digest.generated_at)}
         </p>
       </div>
 

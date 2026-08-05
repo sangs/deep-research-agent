@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { cleanExcerpt, stripLeadingTitle } from '@/lib/excerpt-utils';
+import { formatIsoDateWithYear } from '@/lib/date-utils';
 
 // Toggle to switch excerpt strategy:
 //   'highlights' — Exa's query-aware sentence extraction (best quality, query-relevant)
@@ -45,22 +46,9 @@ function getDomain(url: string): string {
   }
 }
 
-function formatDate(dateStr: string | null): string | null {
-  if (!dateStr) return null;
-  try {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  } catch {
-    return null;
-  }
-}
-
 export function SourceCard({ result }: SourceCardProps) {
   const domain = getDomain(result.url);
-  const date = formatDate(result.publishedDate);
+  const date = formatIsoDateWithYear(result.publishedDate);
   const contentType = getContentType(result.url);
   const rawExcerpt =
     EXCERPT_MODE === 'highlights'

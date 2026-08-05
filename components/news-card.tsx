@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { ExternalLink } from 'lucide-react';
+import { formatBareDate } from '@/lib/date-utils';
 
 export interface ArticleItem {
   title: string;
@@ -21,17 +22,6 @@ interface NewsCardProps {
   id?: string;
 }
 
-function formatDate(dateStr: string | null): string | null {
-  if (!dateStr) return null;
-  try {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-    });
-  } catch {
-    return null;
-  }
-}
 
 const modeAccent: Record<string, string> = {
   general: 'border-l-primary',
@@ -76,7 +66,7 @@ export function renderExcerpt(text: string) {
 
 export function NewsCard({ article, mode = 'general', id }: NewsCardProps) {
   const [open, setOpen] = useState(false);
-  const date = formatDate(article.published_date);
+  const date = formatBareDate(article.published_date);
   const accent = modeAccent[mode] ?? modeAccent.general;
   const chip = sourceChip[mode] ?? sourceChip.general;
   const hasLinks = (article.links?.length ?? 0) > 0;

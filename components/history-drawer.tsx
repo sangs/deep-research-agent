@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { X, Trash2, Clock, Plus } from 'lucide-react';
+import { formatRelativeTime } from '@/lib/date-utils';
 import type { SessionMeta } from '@/lib/history-client';
 
 interface HistoryDrawerProps {
@@ -15,18 +16,6 @@ interface HistoryDrawerProps {
   onDeleteSession: (id: string) => void;
   onNewSession: () => void;
   onClearAll: () => void;
-}
-
-function formatRelativeTime(unixSeconds: number): string {
-  const diffMs = Date.now() - unixSeconds * 1000;
-  const diffMins = Math.floor(diffMs / 60000);
-  if (diffMins < 1) return 'just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return new Date(unixSeconds * 1000).toLocaleDateString();
 }
 
 export function HistoryDrawer({
