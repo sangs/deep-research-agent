@@ -398,8 +398,9 @@ async def run_news_agent(
     emit_event: Callable[[dict], Awaitable[None]] | None,
     question: str | None = None,
     conversation_history: list[dict] | None = None,
+    tz_name: str = 'UTC',
 ) -> NewsDigest:
-    dates = resolve_date_range(time_range)
+    dates = resolve_date_range(time_range, tz_name)
     system = _build_system_prompt(mode, time_range, region, dates, question, conversation_history)
 
     mode_tool_name = _MODE_TOOL.get(mode)

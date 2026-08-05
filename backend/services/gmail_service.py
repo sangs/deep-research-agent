@@ -604,6 +604,7 @@ async def run_gmail_digest(
     subject_kw: str | None,
     by_source: bool,
     emit_event: Callable[[dict], Awaitable[None]] | None,
+    tz_name: str = 'UTC',
 ) -> NewsDigest:
     """Fetch, cluster, and summarize Gmail newsletter emails into a NewsDigest.
 
@@ -613,11 +614,13 @@ async def run_gmail_digest(
         subject_kw:  Optional keyword to filter by subject line.
         by_source:   If True, group emails by sender instead of LLM topic clusters.
         emit_event:  Async callback for streaming search-progress events to the UI.
+        tz_name:     IANA timezone name (e.g. 'America/Los_Angeles') used to resolve
+                     'today'/'yesterday' day boundaries to the user's local calendar day.
 
     Returns:
         NewsDigest with mode='newsletter', topics populated from email clusters.
     """
-    dates      = resolve_date_range(time_range)
+    dates      = resolve_date_range(time_range, tz_name)
     start_iso  = dates['start']
     end_iso    = dates['end']
 
