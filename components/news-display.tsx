@@ -8,7 +8,7 @@ import { getBrowserTimezone } from '@/lib/date-utils';
 
 type NewsStreamEvent =
   | { type: 'searching'; query: string }
-  | { type: 'results'; count: number; query: string }
+  | { type: 'results'; count: number; total?: number; query: string }
   | { type: 'digest'; mode: string; time_range: string; region: string | null; generated_at: string; topics: NewsDigest['topics'] }
   | { type: 'done' }
   | { type: 'error'; message: string };
@@ -86,6 +86,9 @@ export function useNewsStream() {
     newsletter_senders?: string;
     newsletter_subject_kw?: string;
     newsletter_by_source?: boolean;
+    // custom date range — only used when time_range === 'custom'
+    start_date?: string;
+    end_date?: string;
   }) {
     // Cancel any in-flight request
     abortRef.current?.abort();

@@ -1,5 +1,11 @@
 const BACKEND_URL = process.env.BACKEND_URL ?? 'http://localhost:8000';
 
+// Large newsletter digests (month range, many senders) can take minutes to
+// fetch/cluster/summarize — the backend now streams progress incrementally
+// (see backend/main.py), but this route still needs a duration budget wide
+// enough that the platform doesn't kill the connection mid-stream.
+export const maxDuration = 300;
+
 export async function POST(req: Request): Promise<Response> {
   const body = await req.json();
   const upstream = await fetch(`${BACKEND_URL}/digest`, {

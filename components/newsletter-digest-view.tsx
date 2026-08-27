@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, ChevronDown, AlertTriangle } from 'lucide-react';
 import { renderExcerpt } from '@/components/news-card';
 import { formatBareDate } from '@/lib/date-utils';
 import type { TopicCluster } from '@/components/topic-group';
@@ -15,10 +15,19 @@ interface OpenArticle {
 
 interface NewsletterDigestViewProps {
   topics: TopicCluster[];
+  /** True when the backend fetch hit its email cap and more matched than were fetched. */
+  truncated?: boolean;
+  /** Total emails matched by Gmail, when known (may exceed the number rendered). */
+  totalCount?: number;
 }
 
-export function NewsletterDigestView({ topics }: NewsletterDigestViewProps) {
+// Articles shown per topic group before a "Show more" expander appears —
+// bounds initial DOM size regardless of how large the digest is.
+const VISIBLE_STEP = 10;
+
+export function NewsletterDigestView({ topics, truncated, totalCount }: NewsletterDigestViewProps) {
   const [openArticle, setOpenArticle] = useState<OpenArticle | null>(null);
+  const [visibleCounts, setVisibleCounts] = useState<Record<number, number>>({});
 
   // Build flat index: each article gets a sequential number across all groups
   let counter = 0;
@@ -30,6 +39,10 @@ export function NewsletterDigestView({ topics }: NewsletterDigestViewProps) {
 
   const totalArticles = counter;
 
+  function showMore(groupIdx: number) {
+    setVisibleCounts((prev) => ({ ...prev, [groupIdx]: (prev[groupIdx] ?? VISIBLE_STEP) + VISIBLE_STEP }));
+  }
+
   function scrollToSection(groupIdx: number) {
     const el = document.getElementById(`nl-section-${groupIdx}`);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -39,6 +52,17 @@ export function NewsletterDigestView({ topics }: NewsletterDigestViewProps) {
 
   return (
     <div className="space-y-8">
+      {/* Truncation notice — Gmail matched more emails than were fetched */}
+      {truncated && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span>
+            Showing {totalArticles} of {totalCount} matching emails. Narrow the date range or sender
+            filter to see the rest.
+          </span>
+        </div>
+      )}
+
       {/* AT A GLANCE */}
       <div className="rounded-xl border border-border/60 bg-muted/30 px-5 py-4 space-y-3">
         <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
@@ -84,8 +108,9 @@ export function NewsletterDigestView({ topics }: NewsletterDigestViewProps) {
               <div className="h-px flex-1 bg-border/60" />
             </div>
 
-            {/* Article rows */}
-            {articles.map(({ article, num }) => {
+            {/* Article rows — paginated so a huge digest doesn't dump its entire
+                article list into the DOM at once */}
+            {articles.slice(0, visibleCounts[groupIdx] ?? VISIBLE_STEP).map(({ article, num }) => {
               const date = formatBareDate(article.published_date);
               return (
                 <div
@@ -131,6 +156,17 @@ export function NewsletterDigestView({ topics }: NewsletterDigestViewProps) {
                 </div>
               );
             })}
+
+            {/* Show more — reveals the next VISIBLE_STEP articles in this group */}
+            {articles.length > (visibleCounts[groupIdx] ?? VISIBLE_STEP) && (
+              <button
+                onClick={() => showMore(groupIdx)}
+                className="flex items-center gap-1 pl-2 pt-1 text-xs text-muted-foreground hover:text-primary transition-colors"
+              >
+                <ChevronDown className="h-3 w-3" />
+                Show {Math.min(VISIBLE_STEP, articles.length - (visibleCounts[groupIdx] ?? VISIBLE_STEP))} more
+              </button>
+            )}
           </div>
         ))}
       </div>

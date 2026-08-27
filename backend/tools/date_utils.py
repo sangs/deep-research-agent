@@ -13,11 +13,32 @@ def resolve_tz(tz_name: str = 'UTC') -> tzinfo:
         return timezone.utc
 
 
-def resolve_date_range(time_range: str, tz_name: str = 'UTC') -> dict[str, str]:
+def resolve_date_range(
+    time_range: str,
+    tz_name: str = 'UTC',
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, str]:
+    """Resolve a time_range label (or explicit 'custom' dates) to a start/end
+    ISO instant, anchored to the reader's local calendar day in tz_name.
+
+    start_date/end_date (only used when time_range == 'custom') are plain
+    'YYYY-MM-DD' calendar dates — a single date is start_date with end_date
+    omitted/equal, and the resolved end is always exclusive (the START of the
+    day AFTER end_date), so the given end_date is fully included.
+    """
     tz = resolve_tz(tz_name)
     now = datetime.now(tz)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     match time_range:
+        case 'custom':
+            if not start_date:
+                # Defensive fallback — callers should validate before reaching here.
+                return {'start': (today_start - timedelta(days=7)).isoformat(), 'end': now.isoformat()}
+            end_date = end_date or start_date  # single date = start only, end defaults to start
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=tz)
+            end_dt   = datetime.strptime(end_date, '%Y-%m-%d').replace(tzinfo=tz) + timedelta(days=1)
+            return {'start': start_dt.isoformat(), 'end': end_dt.isoformat()}
         case 'today':
             return {'start': today_start.isoformat(), 'end': now.isoformat()}
         case 'yesterday':

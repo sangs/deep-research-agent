@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
   const userId = getUserId(req);
   if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
 
-  const { cacheKey, digest, ttlSeconds } = await req.json();
+  const { cacheKey, digest, ttlSeconds, mode, locked, label, articleCount, rangeStart, rangeEnd } = await req.json();
   if (!cacheKey || !digest) {
     return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
   }
@@ -53,7 +53,9 @@ export async function POST(req: NextRequest) {
   const now = Math.floor(Date.now() / 1000);
   const id = crypto.randomUUID();
 
-  // Upsert — replace if same cache key exists
+  // Upsert, scoped per user — cacheKey alone is no longer globally unique
+  // (two different userIds computing the same key used to silently clobber
+  // each other's row; uniqueness is now the composite (userId, cacheKey)).
   await db
     .insert(newsDigests)
     .values({
@@ -61,17 +63,45 @@ export async function POST(req: NextRequest) {
       userId,
       cacheKey,
       digest: JSON.stringify(digest),
+      mode: mode ?? null,
+      locked: !!locked,
+      label: label ?? null,
+      articleCount: articleCount ?? 0,
+      rangeStart: rangeStart ?? null,
+      rangeEnd: rangeEnd ?? null,
       generatedAt: now,
       expiresAt: now + effectiveTtl,
     })
     .onConflictDoUpdate({
-      target: newsDigests.cacheKey,
+      target: [newsDigests.userId, newsDigests.cacheKey],
       set: {
         digest: JSON.stringify(digest),
+        mode: mode ?? null,
+        locked: !!locked,
+        label: label ?? null,
+        articleCount: articleCount ?? 0,
+        rangeStart: rangeStart ?? null,
+        rangeEnd: rangeEnd ?? null,
         generatedAt: now,
         expiresAt: now + effectiveTtl,
       },
     });
+
+  return NextResponse.json({ ok: true });
+}
+
+// PATCH /api/history/news — rename a saved digest (label only; no digest/expiry change)
+export async function PATCH(req: NextRequest) {
+  const userId = getUserId(req);
+  if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
+
+  const { cacheKey, label } = await req.json();
+  if (!cacheKey) return NextResponse.json({ error: 'Missing key' }, { status: 400 });
+
+  await db
+    .update(newsDigests)
+    .set({ label: label ?? null })
+    .where(and(eq(newsDigests.cacheKey, cacheKey), eq(newsDigests.userId, userId)));
 
   return NextResponse.json({ ok: true });
 }

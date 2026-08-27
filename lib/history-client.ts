@@ -85,14 +85,36 @@ export async function getCachedDigest(cacheKey: string): Promise<NewsDigest | nu
   }
 }
 
-export async function saveDigestToCache(cacheKey: string, digest: NewsDigest, ttlSeconds?: number): Promise<void> {
+export interface SavedDigestMeta {
+  cacheKey: string;
+  label: string | null;
+  locked: boolean;
+  articleCount: number;
+  rangeStart: string | null;
+  rangeEnd: string | null;
+  generatedAt: number;
+}
+
+export async function saveDigestToCache(
+  cacheKey: string,
+  digest: NewsDigest,
+  ttlSeconds?: number,
+  meta?: {
+    mode?: string;
+    locked?: boolean;
+    label?: string;
+    articleCount?: number;
+    rangeStart?: string;
+    rangeEnd?: string;
+  }
+): Promise<void> {
   const userId = getUserId();
   if (!userId) return;
   try {
     await fetch('/api/history/news', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-      body: JSON.stringify({ cacheKey, digest, ttlSeconds }),
+      body: JSON.stringify({ cacheKey, digest, ttlSeconds, ...meta }),
     });
   } catch {
     // ignore save errors silently
@@ -112,6 +134,35 @@ export async function clearCachedDigest(cacheKey: string): Promise<void> {
   }
 }
 
+/** List saved (locked) digests for a mode, newest first — lightweight metadata only. */
+export async function listSavedDigests(mode: string, offset = 0): Promise<{ items: SavedDigestMeta[]; hasMore: boolean }> {
+  const userId = getUserId();
+  if (!userId) return { items: [], hasMore: false };
+  try {
+    const res = await fetch(`/api/history/news/list?mode=${encodeURIComponent(mode)}&offset=${offset}`, {
+      headers: { 'X-User-Id': userId },
+    });
+    if (!res.ok) return { items: [], hasMore: false };
+    return res.json();
+  } catch {
+    return { items: [], hasMore: false };
+  }
+}
+
+export async function renameDigest(cacheKey: string, label: string | null): Promise<void> {
+  const userId = getUserId();
+  if (!userId) return;
+  try {
+    await fetch('/api/history/news', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+      body: JSON.stringify({ cacheKey, label }),
+    });
+  } catch {
+    // ignore errors silently
+  }
+}
+
 /** Deterministic cache key from search parameters */
 export function buildCacheKey(
   mode: string,
@@ -123,12 +174,18 @@ export function buildCacheKey(
 }
 
 /** Cache key for Newsletter panel — uses resolved start date so the key is
- *  anchored to an actual calendar date, not a relative label. */
+ *  anchored to an actual calendar date, not a relative label.
+ *  customStart/customEnd are only used when timeRange === 'custom' — without
+ *  them, resolveTimeRangeStart() has no 'custom' case and would silently
+ *  fall through to its 'week' default, colliding every custom range with
+ *  every other custom range regardless of the actual dates picked. */
 export function buildNewsletterCacheKey(
   timeRange: string,
   senders: string,
   subjectKw: string,
-  bySource: boolean
+  bySource: boolean,
+  customStart?: string,
+  customEnd?: string
 ): string {
   const sortedSenders = senders
     .split(',')
@@ -136,6 +193,8 @@ export function buildNewsletterCacheKey(
     .filter(Boolean)
     .sort()
     .join(',');
-  const dateKey = resolveTimeRangeStart(timeRange); // e.g. "2026-03-30"
+  const dateKey = timeRange === 'custom'
+    ? `${customStart ?? ''}_${customEnd || customStart || ''}`
+    : resolveTimeRangeStart(timeRange); // e.g. "2026-03-30"
   return btoa(['newsletter', dateKey, sortedSenders, subjectKw.trim().toLowerCase(), bySource ? '1' : '0'].join('|'));
 }
