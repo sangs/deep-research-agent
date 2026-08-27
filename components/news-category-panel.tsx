@@ -7,9 +7,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { NewsPanel } from '@/components/news-panel';
 import { NewsletterDigestView } from '@/components/newsletter-digest-view';
+import { SavedDigestsDrawer } from '@/components/saved-digests-drawer';
 import { useNewsStream } from '@/components/news-display';
-import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, LockOpen, RefreshCw } from 'lucide-react';
+import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, LockOpen, RefreshCw, Bookmark } from 'lucide-react';
 import { getCachedDigest, saveDigestToCache, clearCachedDigest, buildCacheKey, buildNewsletterCacheKey } from '@/lib/history-client';
+import { toLocalDateKey, resolveTimeRangeStart } from '@/lib/date-utils';
 
 // Newsletter cache rows never expire — Lock/Unlock is the only way to add/remove them.
 // Set to year 2286 (far-future Unix timestamp) so the WHERE expires_at > now() filter always passes.
@@ -17,7 +19,7 @@ const NEWSLETTER_NO_EXPIRY = 9999999999;
 import type { ThreadEntry } from '@/components/news-display';
 import type { NewsDigest } from '@/components/news-dashboard';
 
-type TimeRange = 'today' | 'yesterday' | 'week' | 'month';
+type TimeRange = 'today' | 'yesterday' | 'week' | 'month' | 'custom';
 type Region = 'US' | 'India' | 'Europe' | 'APAC' | 'UK' | 'LatAm';
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
@@ -26,6 +28,16 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'week', label: 'Past Week' },
   { value: 'month', label: 'Past Month' },
 ];
+
+// Newsletter-only — 'Custom' isn't wired up for the other 4 tabs' backend yet.
+const NEWSLETTER_TIME_RANGES: { value: TimeRange; label: string }[] = [
+  ...TIME_RANGES,
+  { value: 'custom', label: 'Custom' },
+];
+
+// Soft guardrail sized against gmail_service.py's MAX_EMAILS_FETCH/AUTO_BY_SOURCE_THRESHOLD —
+// a wider custom range risks a slow, truncated fetch.
+const MAX_CUSTOM_RANGE_DAYS = 90;
 
 const REGIONS: { value: Region; label: string }[] = [
   { value: 'US', label: 'United States' },
@@ -120,8 +132,11 @@ export function NewsCategoryPanel({
   const [nlSenders, setNlSenders] = useState('');
   const [nlSubjectKw, setNlSubjectKw] = useState('');
   const [nlBySource, setNlBySource] = useState(false);
+  const [nlCustomStart, setNlCustomStart] = useState('');
+  const [nlCustomEnd, setNlCustomEnd] = useState('');
   // True after user clicks Lock this session (resets on filter change or new Run)
   const [nlSavedToCache, setNlSavedToCache] = useState(false);
+  const [savedDigestsOpen, setSavedDigestsOpen] = useState(false);
   const [expandedPriorRuns, setExpandedPriorRuns] = useState<Set<number>>(new Set());
   const [showScrollTop, setShowScrollTop] = useState(false);
   const lastRunParamsRef = useRef<{ cacheKey: string } | null>(null);
@@ -129,21 +144,50 @@ export function NewsCategoryPanel({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const searchEvents = events.filter((e) => e.type === 'searching') as { type: 'searching'; query: string }[];
+  const resultsEvent = events.find((e) => e.type === 'results') as { type: 'results'; count: number; total?: number } | undefined;
+  const nlTruncated = !!resultsEvent && typeof resultsEvent.total === 'number' && resultsEvent.total > resultsEvent.count;
   const modeType = mode === 'curated' || mode === 'research' || mode === 'newsletter' ? 'curated' : mode === 'region' ? 'region' : 'general';
   const latestArticleCount = digest ? articleCount(digest) : 0;
 
   // Newsletter cache key — recomputed whenever filters change (not stored in state)
   const nlCacheKey = mode === 'newsletter'
-    ? buildNewsletterCacheKey(timeRange, nlSenders, nlSubjectKw, nlBySource)
+    ? buildNewsletterCacheKey(timeRange, nlSenders, nlSubjectKw, nlBySource, nlCustomStart, nlCustomEnd)
     : null;
   // Locked = restored from a previously saved cache entry OR locked by the user in this session
   const nlIsLocked = fromCache || nlSavedToCache;
+
+  const todayStr = toLocalDateKey(new Date());
+  // A custom range ending today is still "live" (more emails could still arrive today),
+  // so it needs the same explicit Lock control as the 'today' preset. A custom range
+  // fully in the past behaves like week/month — auto-saved permanently after each run.
+  const nlIncludesToday = timeRange === 'today' || (timeRange === 'custom' && (nlCustomEnd || nlCustomStart) === todayStr);
+
+  // Custom range validation — null when valid
+  const nlCustomRangeError = (() => {
+    if (mode !== 'newsletter' || timeRange !== 'custom') return null;
+    if (!nlCustomStart) return 'Pick a start date.';
+    if (nlCustomStart > todayStr) return 'Start date cannot be in the future.';
+    const effectiveEnd = nlCustomEnd || nlCustomStart;
+    if (effectiveEnd > todayStr) return 'End date cannot be in the future.';
+    if (effectiveEnd < nlCustomStart) return 'End date must be on or after the start date.';
+    const spanDays = (new Date(effectiveEnd).getTime() - new Date(nlCustomStart).getTime()) / 86400000;
+    if (spanDays > MAX_CUSTOM_RANGE_DAYS) return `Custom range can't exceed ${MAX_CUSTOM_RANGE_DAYS} days.`;
+    return null;
+  })();
+
+  // Calendar-date bounds for the current filters — stored alongside locked
+  // digests so the Saved Digests picker can show a real date range without
+  // deserializing the full digest JSON.
+  const nlRangeStart = timeRange === 'custom' ? nlCustomStart : resolveTimeRangeStart(timeRange);
+  const nlRangeEnd = timeRange === 'custom'
+    ? (nlCustomEnd || nlCustomStart)
+    : (timeRange === 'today' || timeRange === 'yesterday') ? nlRangeStart : todayStr;
 
   // Reset "locked this session" whenever Newsletter filters change
   useEffect(() => {
     if (mode === 'newsletter') setNlSavedToCache(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeRange, nlSenders, nlSubjectKw, nlBySource]);
+  }, [timeRange, nlSenders, nlSubjectKw, nlBySource, nlCustomStart, nlCustomEnd]);
 
   useEffect(() => {
     onStatusChange?.(status, latestArticleCount);
@@ -172,6 +216,7 @@ export function NewsCategoryPanel({
 
   async function handleRun() {
     if (mode === 'newsletter') {
+      if (nlCustomRangeError) return;
       setNlSavedToCache(false);
       // Check cache — serves locked (today) or auto-cached (historical) results instantly
       const cached = await getCachedDigest(nlCacheKey!);
@@ -185,6 +230,8 @@ export function NewsCategoryPanel({
         newsletter_senders: nlSenders.trim() || undefined,
         newsletter_subject_kw: nlSubjectKw.trim() || undefined,
         newsletter_by_source: nlBySource,
+        start_date: timeRange === 'custom' ? nlCustomStart : undefined,
+        end_date: timeRange === 'custom' ? (nlCustomEnd || nlCustomStart) : undefined,
       });
       return;
     }
@@ -224,18 +271,35 @@ export function NewsCategoryPanel({
       status === 'done' &&
       digest &&
       !fromCache &&
-      timeRange !== 'today' &&
+      !nlIncludesToday &&
       nlCacheKey
     ) {
-      saveDigestToCache(nlCacheKey, digest, NEWSLETTER_NO_EXPIRY);
+      saveDigestToCache(nlCacheKey, digest, NEWSLETTER_NO_EXPIRY, {
+        mode: 'newsletter',
+        locked: true,
+        articleCount: articleCount(digest),
+        rangeStart: nlRangeStart,
+        rangeEnd: nlRangeEnd,
+      });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, digest, fromCache]);
 
   async function handleNlLock() {
     if (!nlCacheKey || !digest) return;
-    await saveDigestToCache(nlCacheKey, digest, NEWSLETTER_NO_EXPIRY);
+    await saveDigestToCache(nlCacheKey, digest, NEWSLETTER_NO_EXPIRY, {
+      mode: 'newsletter',
+      locked: true,
+      articleCount: articleCount(digest),
+      rangeStart: nlRangeStart,
+      rangeEnd: nlRangeEnd,
+    });
     setNlSavedToCache(true);
+  }
+
+  async function handleSelectSavedDigest(cacheKey: string) {
+    const cached = await getCachedDigest(cacheKey);
+    if (cached) restore(cached);
   }
 
   async function handleNlUnlockAndRefresh() {
@@ -249,6 +313,8 @@ export function NewsCategoryPanel({
       newsletter_senders: nlSenders.trim() || undefined,
       newsletter_subject_kw: nlSubjectKw.trim() || undefined,
       newsletter_by_source: nlBySource,
+      start_date: timeRange === 'custom' ? nlCustomStart : undefined,
+      end_date: timeRange === 'custom' ? (nlCustomEnd || nlCustomStart) : undefined,
     });
   }
 
@@ -292,6 +358,15 @@ export function NewsCategoryPanel({
                 {latestArticleCount} article{latestArticleCount !== 1 ? 's' : ''}
               </Badge>
             </div>
+          )}
+          {mode === 'newsletter' && (
+            <button
+              onClick={() => setSavedDigestsOpen(true)}
+              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+            >
+              <Bookmark className="h-3 w-3" />
+              Saved digests
+            </button>
           )}
           {(mode === 'curated' || mode === 'research' || mode === 'newsletter') && onManageSources && (
             <button
@@ -352,12 +427,45 @@ export function NewsCategoryPanel({
               onValueChange={(v) => v && setTimeRange(v as TimeRange)}
               className="flex-wrap"
             >
-              {TIME_RANGES.map((t) => (
+              {NEWSLETTER_TIME_RANGES.map((t) => (
                 <ToggleGroupItem key={t.value} value={t.value} className="text-xs h-7 px-2">
                   {t.label}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
+
+            {timeRange === 'custom' && (
+              <div className="flex flex-wrap items-center gap-2 pt-1.5">
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  Start
+                  <input
+                    type="date"
+                    value={nlCustomStart}
+                    max={todayStr}
+                    onChange={(e) => setNlCustomStart(e.target.value)}
+                    className="rounded-md border border-input bg-background/60 px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                </label>
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  End
+                  <input
+                    type="date"
+                    value={nlCustomEnd}
+                    min={nlCustomStart || undefined}
+                    max={todayStr}
+                    onChange={(e) => setNlCustomEnd(e.target.value)}
+                    placeholder={nlCustomStart}
+                    className="rounded-md border border-input bg-background/60 px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                </label>
+                <span className="text-[10px] text-muted-foreground">
+                  Leave End blank for a single day
+                </span>
+              </div>
+            )}
+            {timeRange === 'custom' && nlCustomRangeError && (
+              <p className="text-[10px] text-destructive pt-0.5">{nlCustomRangeError}</p>
+            )}
           </div>
 
           {/* Sender filter */}
@@ -417,6 +525,7 @@ export function NewsCategoryPanel({
               )}
               <Button
                 size="sm"
+                disabled={status !== 'loading' && !!nlCustomRangeError}
                 className={status === 'loading' ? 'h-7 text-xs gap-1 bg-destructive hover:bg-destructive/90 text-white' : 'h-7 text-xs gap-1'}
                 onClick={status === 'loading' ? stop : handleRun}
               >
@@ -434,11 +543,11 @@ export function NewsCategoryPanel({
       {/* ── Newsletter cache control bar ─────────────────────────── */}
       {mode === 'newsletter' && status === 'done' && latestRun && latestRun.digest.topics.length > 0 && nlCacheKey && (
         <div className="border-b px-4 py-2 flex items-center gap-3 bg-muted/10 flex-shrink-0">
-          {timeRange === 'today' ? (
+          {nlIncludesToday ? (
             nlIsLocked ? (
               <>
                 <span className="text-xs text-primary flex items-center gap-1">
-                  <Lock className="h-3 w-3" /> Digest locked for today
+                  <Lock className="h-3 w-3" /> Digest locked{timeRange === 'today' ? ' for today' : ''}
                 </span>
                 <button
                   onClick={handleNlUnlockAndRefresh}
@@ -452,7 +561,7 @@ export function NewsCategoryPanel({
                 onClick={handleNlLock}
                 className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors"
               >
-                <Lock className="h-3 w-3" /> Lock digest for today
+                <Lock className="h-3 w-3" /> Lock digest{timeRange === 'today' ? ' for today' : ''}
               </button>
             )
           ) : (
@@ -631,7 +740,11 @@ export function NewsCategoryPanel({
                     </p>
                   </div>
                 ) : mode === 'newsletter' ? (
-                  <NewsletterDigestView topics={latestRun.digest.topics} />
+                  <NewsletterDigestView
+                    topics={latestRun.digest.topics}
+                    truncated={nlTruncated}
+                    totalCount={resultsEvent?.total}
+                  />
                 ) : (
                   <NewsPanel topics={latestRun.digest.topics} mode={modeType} />
                 )}
@@ -667,6 +780,15 @@ export function NewsCategoryPanel({
         >
           <ArrowUp className="h-4 w-4 text-muted-foreground" />
         </button>
+      )}
+
+      {mode === 'newsletter' && (
+        <SavedDigestsDrawer
+          open={savedDigestsOpen}
+          mode="newsletter"
+          onClose={() => setSavedDigestsOpen(false)}
+          onSelect={handleSelectSavedDigest}
+        />
       )}
     </div>
   );

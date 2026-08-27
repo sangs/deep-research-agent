@@ -2,6 +2,7 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="websockets")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="uvicorn")
 
+import asyncio
 import json
 import sys
 import os
@@ -47,47 +48,67 @@ async def digest_endpoint(request: Request) -> Response:
     newsletter_senders   = [s.strip() for s in (body.get('newsletter_senders') or '').split(',') if s.strip()]
     newsletter_subject   = body.get('newsletter_subject_kw') or None
     newsletter_by_source = bool(body.get('newsletter_by_source', False))
+    # Custom date range (only used when time_range == 'custom')
+    start_date = body.get('start_date') or None
+    end_date   = body.get('end_date') or None
 
     async def event_stream():
-        events: list[dict] = []
+        # Events are pushed onto a queue by the pipeline (running as a
+        # background task) and drained here in real time, so the client sees
+        # incremental progress instead of one burst after the entire fetch/
+        # cluster/summarize pipeline finishes. The previous implementation
+        # buffered every event into a list and only yielded after `await
+        # run_gmail_digest(...)` fully returned — for a large digest (a
+        # month range, many senders) that meant zero bytes reached the
+        # client for minutes, risking proxy/serverless idle-timeout kills.
+        queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
         async def emit(event: dict):
-            events.append(event)
+            await queue.put(event)
 
+        async def run_pipeline():
+            try:
+                if mode == 'newsletter':
+                    from services.gmail_service import run_gmail_digest
+                    digest = await run_gmail_digest(
+                        time_range=time_range,
+                        senders=newsletter_senders or None,
+                        subject_kw=newsletter_subject,
+                        by_source=newsletter_by_source,
+                        emit_event=emit,
+                        tz_name=tz_name,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                else:
+                    from services.openrouter import run_news_agent
+                    digest = await run_news_agent(
+                        mode=mode,
+                        time_range=time_range,
+                        region=region,
+                        custom_domains=custom_domains,
+                        question=question,
+                        conversation_history=conversation_history,
+                        emit_event=emit,
+                        tz_name=tz_name,
+                    )
+                await queue.put({'type': 'digest', **digest.model_dump()})
+                await queue.put({'type': 'done'})
+            except Exception as e:
+                await queue.put({'type': 'error', 'message': str(e)})
+            finally:
+                await queue.put(None)  # sentinel — end of stream
+
+        task = asyncio.create_task(run_pipeline())
         try:
-            if mode == 'newsletter':
-                from services.gmail_service import run_gmail_digest
-                digest = await run_gmail_digest(
-                    time_range=time_range,
-                    senders=newsletter_senders or None,
-                    subject_kw=newsletter_subject,
-                    by_source=newsletter_by_source,
-                    emit_event=emit,
-                    tz_name=tz_name,
-                )
-            else:
-                from services.openrouter import run_news_agent
-                digest = await run_news_agent(
-                    mode=mode,
-                    time_range=time_range,
-                    region=region,
-                    custom_domains=custom_domains,
-                    question=question,
-                    conversation_history=conversation_history,
-                    emit_event=emit,
-                    tz_name=tz_name,
-                )
-
-            # Yield all accumulated search-progress events first
-            for ev in events:
-                yield f'data: {json.dumps(ev)}\n\n'
-
-            # Yield the digest
-            yield f'data: {json.dumps({"type": "digest", **digest.model_dump()})}\n\n'
-            yield f'data: {json.dumps({"type": "done"})}\n\n'
-
-        except Exception as e:
-            yield f'data: {json.dumps({"type": "error", "message": str(e)})}\n\n'
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield f'data: {json.dumps(event)}\n\n'
+        finally:
+            if not task.done():
+                task.cancel()
 
     return StreamingResponse(
         event_stream(),

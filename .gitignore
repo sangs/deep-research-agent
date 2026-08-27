@@ -42,7 +42,6 @@ next-env.d.ts
 
 # local documents and notes
 /documents/
-/Notes/
 
 # python
 __pycache__/

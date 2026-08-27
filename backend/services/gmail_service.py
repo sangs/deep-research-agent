@@ -42,7 +42,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Awaitable
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 import httpx
 from dotenv import load_dotenv
@@ -60,6 +60,13 @@ MODEL = '~google/gemini-flash-latest'
 DIGESTED_LABEL = 'gmail-ai-digested'   # applied to every matched email
 DIGEST_FOLDER  = 'Digest'              # used by standalone tool; kept for reference
 
+# Scale guardrails — a "past month" pull across many senders can return
+# hundreds of emails; these bound the work done per digest run.
+MAX_EMAILS_FETCH        = 500  # hard cap on emails fetched per digest run
+AUTO_BY_SOURCE_THRESHOLD = 60  # above this count, skip the single-prompt LLM
+                                # topic-cluster call (context/latency limits)
+                                # and auto-group by sender instead — O(n), always succeeds
+
 # Gmail OAuth scopes — modify permission allows labelling matched emails
 SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
 
@@ -68,7 +75,7 @@ _URL_SKIP = (
     'unsubscribe', 'optout', 'opt-out', 'manage', 'preferences',
     'pixel', 'beacon', 'track', 'click.', 'open.', 'list-manage',
     'mailchimp', 'sendgrid', 'constantcontact', 'campaign-archive',
-    '.gif', '.png', '.jpg', '.ico', 'mailto:',
+    '.gif', '.png', '.jpg', '.ico', 'mailto:', 'feedback=', '/fb/',
 )
 
 # Zero-width / invisible Unicode chars injected by ESP platforms (e.g. Beehiiv)
@@ -219,19 +226,82 @@ def extract_urls(text: str) -> list[str]:
     return [u for u in raw if not any(s in u.lower() for s in _URL_SKIP)]
 
 
+_HREF_RE = re.compile(r'href\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def extract_hrefs(payload) -> list[str]:
+    """Recursively extract href="..." URLs from raw HTML MIME parts.
+
+    decode_body() strips all HTML tags (including anchor hrefs) before
+    extract_urls() ever sees the text, so styled newsletters whose CTA links
+    live only in an href attribute (visible text like "Read more" or an emoji
+    label, not the URL itself — e.g. AlphaSignal) lose their links entirely.
+    This walks the payload tree independently, before tag-stripping, so those
+    hrefs survive.
+    """
+    mime      = payload.get('mimeType', '')
+    body_data = payload.get('body', {}).get('data', '')
+    hrefs: list[str] = []
+
+    if mime == 'text/html' and body_data:
+        raw = base64.urlsafe_b64decode(body_data).decode('utf-8', errors='replace')
+        for href in _HREF_RE.findall(raw):
+            href = _HTML_ENTITY_RE.sub(lambda m: _HTML_ENTITIES[m.group()], href)
+            if not href.lower().startswith(('http://', 'https://')):
+                continue  # skip mailto:, tel:, #anchor, javascript: etc.
+            if any(s in href.lower() for s in _URL_SKIP):
+                continue
+            hrefs.append(href)
+
+    if 'parts' in payload:
+        for part in payload['parts']:
+            hrefs.extend(extract_hrefs(part))
+
+    return hrefs
+
+
+# Cosmetic query params that don't distinguish one link's destination from
+# another (safe to ignore for dedup). Anything else — e.g. AlphaSignal's
+# `lid=` — is kept, since some senders wrap every distinct article behind an
+# identical-path click-tracking redirector (`app.alphasignal.ai/c?...lid=X`)
+# and put the only distinguishing signal in the query string.
+_COSMETIC_QUERY_PARAMS = {
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
+    'ref', 'referrer', 'fbclid', 'gclid', 'mc_cid', 'mc_eid',
+}
+
+
+def dedup_key(url: str) -> str:
+    """Normalize a URL for deduplication — strips cosmetic tracking params
+    but preserves other query params that may carry real link identity."""
+    parsed = urlparse(url)
+    kept = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+            if k.lower() not in _COSMETIC_QUERY_PARAMS]
+    query = urlencode(kept)
+    return urlunparse(parsed._replace(query=query, fragment='')).rstrip('/')
+
+
 def pick_primary_link(urls: list[str]) -> str:
-    """Return the most article-like URL — prefers longer paths, deduplicates."""
+    """Return the most article-like URL — prefers longer path+query, deduplicates.
+
+    Path+query (not path alone) is the scoring signal because click-tracking
+    redirectors often share one short path across every article ('/c') and
+    encode the real distinguishing identity in the query string.
+    """
     seen, unique = set(), []
     for u in urls:
-        norm = u.split('?')[0].rstrip('/')
+        norm = dedup_key(u)
         if norm not in seen:
             seen.add(norm)
             unique.append(u)
     if not unique:
         return ''
-    meaningful = [u for u in unique if len(urlparse(u).path.strip('/')) > 3]
+    def specificity(u: str) -> int:
+        p = urlparse(u)
+        return len(p.path.strip('/')) + len(p.query)
+    meaningful = [u for u in unique if specificity(u) > 3]
     candidates = meaningful or unique
-    return max(candidates, key=lambda u: len(urlparse(u).path))
+    return max(candidates, key=specificity)
 
 
 def sender_display(from_header: str) -> str:
@@ -310,14 +380,22 @@ def build_query(start_iso: str, end_iso: str, senders: list[str], subject_kw: st
     return ' '.join(parts)
 
 
-def fetch_emails(service, query: str, max_results: int = 200) -> list[dict]:
-    """Fetch full email objects matching query (sync — call via asyncio.to_thread)."""
-    messages, page_token = [], None
+def fetch_emails(service, query: str, max_results: int = MAX_EMAILS_FETCH) -> tuple[list[dict], int]:
+    """Fetch full email objects matching query (sync — call via asyncio.to_thread).
+
+    Returns (emails, total_estimate) — total_estimate is Gmail's own count of
+    all matching messages (from resultSizeEstimate on the first page), which
+    may exceed max_results. Callers use this to tell the user when results
+    were truncated instead of silently dropping the rest.
+    """
+    messages, page_token, total_estimate = [], None, None
     while True:
         kwargs = {'userId': 'me', 'q': query, 'maxResults': min(max_results, 100)}
         if page_token:
             kwargs['pageToken'] = page_token
         resp = service.users().messages().list(**kwargs).execute()
+        if total_estimate is None:
+            total_estimate = resp.get('resultSizeEstimate', 0)
         batch = resp.get('messages', [])
         messages.extend(batch)
         page_token = resp.get('nextPageToken')
@@ -331,7 +409,7 @@ def fetch_emails(service, query: str, max_results: int = 200) -> list[dict]:
         ).execute()
         headers = {h['name'].lower(): h['value'] for h in full['payload'].get('headers', [])}
         body    = decode_body(full['payload'])
-        links   = extract_urls(body) + extract_urls(full.get('snippet', ''))
+        links   = extract_urls(body) + extract_urls(full.get('snippet', '')) + extract_hrefs(full['payload'])
         emails.append({
             'id':      msg['id'],
             'subject': headers.get('subject', '(no subject)'),
@@ -342,7 +420,7 @@ def fetch_emails(service, query: str, max_results: int = 200) -> list[dict]:
             'links':   links,
         })
 
-    return emails
+    return emails, max(total_estimate or 0, len(emails))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -458,12 +536,18 @@ Rules:
 # LLM SUMMARIZATION (replaces Anthropic SDK calls)
 # ═══════════════════════════════════════════════════════════════════════════
 
-async def _summarize_via_openrouter(emails: list[dict]) -> dict[int, str]:
+async def _summarize_via_openrouter(
+    emails: list[dict],
+    emit_event: Callable[[dict], Awaitable[None]] | None = None,
+) -> dict[int, str]:
     """Generate a 2-4 sentence summary for each email via OpenRouter.
 
     Returns {email_index: summary_text}.  Falls back to the raw Gmail snippet
     on any error or if the body is very short (< 200 chars).
     Processes up to 5 emails concurrently to stay within rate limits.
+    Emits a progress event after each batch when there's more than one batch,
+    so large digests (month range, many senders) show live progress instead
+    of one static "Summarizing…" message for minutes.
     """
     if not OPENROUTER_API_KEY:
         return {}
@@ -525,6 +609,8 @@ async def _summarize_via_openrouter(emails: list[dict]) -> dict[int, str]:
         batch = [(i + j, emails[i + j]) for j in range(min(batch_size, len(emails) - i))]
         batch_results = await asyncio.gather(*[_summarize_one(idx, e) for idx, e in batch])
         results.update(batch_results)
+        if emit_event and len(emails) > batch_size:
+            await emit_event({'type': 'searching', 'query': f'Summarized {len(results)}/{len(emails)} emails…'})
 
     return results
 
@@ -551,11 +637,15 @@ def _build_newsletter_digest(
             url     = pick_primary_link(e['links'])
             excerpt = summaries.get(idx) or e['snippet'] or ''
 
-            # Deduplicate up to 5 links (tracking links already filtered by extract_urls)
+            # Deduplicate up to 5 links (tracking links already filtered by extract_urls).
+            # Uses dedup_key(), not a blind query-string strip — some senders (e.g.
+            # AlphaSignal) route every distinct article through an identical-path
+            # redirector and only differ by query param, so stripping the whole
+            # query would collapse genuinely different articles into one.
             seen_norms: set[str] = set()
             deduped_links: list[str] = []
             for link in e['links']:
-                norm = link.split('?')[0].rstrip('/')
+                norm = dedup_key(link)
                 if norm not in seen_norms:
                     seen_norms.add(norm)
                     deduped_links.append(link)
@@ -597,22 +687,27 @@ async def run_gmail_digest(
     by_source: bool,
     emit_event: Callable[[dict], Awaitable[None]] | None,
     tz_name: str = 'UTC',
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> NewsDigest:
     """Fetch, cluster, and summarize Gmail newsletter emails into a NewsDigest.
 
     Args:
-        time_range:  'today' | 'yesterday' | 'week' | 'month'
+        time_range:  'today' | 'yesterday' | 'week' | 'month' | 'custom'
         senders:     Optional list of sender email addresses to filter by.
         subject_kw:  Optional keyword to filter by subject line.
         by_source:   If True, group emails by sender instead of LLM topic clusters.
         emit_event:  Async callback for streaming search-progress events to the UI.
         tz_name:     IANA timezone name (e.g. 'America/Los_Angeles') used to resolve
                      'today'/'yesterday' day boundaries to the user's local calendar day.
+        start_date:  'YYYY-MM-DD' — only used when time_range == 'custom'.
+        end_date:    'YYYY-MM-DD' — only used when time_range == 'custom'; defaults
+                     to start_date (single-day digest) when omitted.
 
     Returns:
         NewsDigest with mode='newsletter', topics populated from email clusters.
     """
-    dates      = resolve_date_range(time_range, tz_name)
+    dates      = resolve_date_range(time_range, tz_name, start_date, end_date)
     start_iso  = dates['start']
     end_iso    = dates['end']
 
@@ -657,13 +752,16 @@ async def run_gmail_digest(
     if emit_event:
         await emit_event({'type': 'searching', 'query': f'Gmail {date_label}'})
 
-    emails = await asyncio.to_thread(fetch_emails, service, query)
+    emails, total_estimate = await asyncio.to_thread(fetch_emails, service, query)
 
     if emit_event:
         await emit_event({
             'type':  'results',
             'count': len(emails),
-            'query': f'Gmail ({len(emails)} email{"s" if len(emails) != 1 else ""})',
+            'total': total_estimate,
+            'query': f'Gmail ({len(emails)} of {total_estimate} email{"s" if total_estimate != 1 else ""})'
+                     if total_estimate > len(emails)
+                     else f'Gmail ({len(emails)} email{"s" if len(emails) != 1 else ""})',
         })
 
     if not emails:
@@ -677,11 +775,17 @@ async def run_gmail_digest(
         pass  # tagging failure is non-fatal
 
     # ── Step 4: Cluster ──────────────────────────────────────────────────────
+    # Above the threshold, skip the single-prompt LLM topic-cluster call —
+    # it doesn't scale (context/latency limits, silent fallback on failure)
+    # — and group by sender instead, which is O(n) and always succeeds.
+    effective_by_source = by_source or len(emails) > AUTO_BY_SOURCE_THRESHOLD
     if emit_event:
-        mode_label = 'by source' if by_source else 'by topic'
-        await emit_event({'type': 'searching', 'query': f'Clustering {len(emails)} emails {mode_label}…'})
+        mode_label = 'by source' if effective_by_source else 'by topic'
+        auto_note  = (f' (auto — {len(emails)} emails exceeds topic-clustering limit)'
+                      if effective_by_source and not by_source else '')
+        await emit_event({'type': 'searching', 'query': f'Clustering {len(emails)} emails {mode_label}{auto_note}…'})
 
-    if by_source:
+    if effective_by_source:
         clusters, cluster_names = _group_by_source(emails)
     else:
         clusters, cluster_names = await _cluster_via_llm(emails)
@@ -690,7 +794,7 @@ async def run_gmail_digest(
     if emit_event:
         await emit_event({'type': 'searching', 'query': f'Summarizing {len(emails)} emails…'})
 
-    summaries = await _summarize_via_openrouter(emails)
+    summaries = await _summarize_via_openrouter(emails, emit_event)
 
     # ── Step 6: Assemble digest ──────────────────────────────────────────────
     return _build_newsletter_digest(emails, clusters, cluster_names, summaries, time_range, tz_name)
