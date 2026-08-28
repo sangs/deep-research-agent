@@ -88,6 +88,7 @@ export async function getCachedDigest(cacheKey: string): Promise<NewsDigest | nu
 export interface SavedDigestMeta {
   cacheKey: string;
   label: string | null;
+  tags: string[];
   locked: boolean;
   articleCount: number;
   rangeStart: string | null;
@@ -103,6 +104,7 @@ export async function saveDigestToCache(
     mode?: string;
     locked?: boolean;
     label?: string;
+    tags?: string[];
     articleCount?: number;
     rangeStart?: string;
     rangeEnd?: string;
@@ -157,6 +159,21 @@ export async function renameDigest(cacheKey: string, label: string | null): Prom
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
       body: JSON.stringify({ cacheKey, label }),
+    });
+  } catch {
+    // ignore errors silently
+  }
+}
+
+/** Full-replace a digest's tag list (simplest — a handful of tags per digest, no need for granular add/remove endpoints). */
+export async function updateDigestTags(cacheKey: string, tags: string[]): Promise<void> {
+  const userId = getUserId();
+  if (!userId) return;
+  try {
+    await fetch('/api/history/news', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+      body: JSON.stringify({ cacheKey, tags }),
     });
   } catch {
     // ignore errors silently

@@ -21,6 +21,7 @@ export const newsDigests = pgTable('news_digests', {
   mode: text('mode'), // e.g. 'newsletter' — null for non-newsletter tabs' rows
   locked: boolean('locked').notNull().default(false), // replaces the old far-future-expiresAt hack
   label: text('label'), // user-provided rename for the Saved Digests picker; null = show default title
+  tags: text('tags').array().notNull().default([]), // user-provided tags, multiple per digest
   articleCount: integer('article_count').notNull().default(0),
   rangeStart: text('range_start'), // YYYY-MM-DD
   rangeEnd: text('range_end'),     // YYYY-MM-DD

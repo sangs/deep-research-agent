@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
     .select({
       cacheKey: newsDigests.cacheKey,
       label: newsDigests.label,
+      tags: newsDigests.tags,
       locked: newsDigests.locked,
       articleCount: newsDigests.articleCount,
       rangeStart: newsDigests.rangeStart,
