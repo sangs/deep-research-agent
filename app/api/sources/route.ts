@@ -9,6 +9,7 @@ export async function GET(): Promise<Response> {
     news_sites: [] as string[],
     research_sites: [] as string[],
     newsletters: [] as string[],
+    global_news_sites: [] as string[],
   };
   for (const row of rows) {
     const key = row.listType as keyof typeof grouped;

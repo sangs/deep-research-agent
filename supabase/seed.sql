@@ -46,5 +46,24 @@ INSERT INTO curated_sources (domain, list_type) VALUES
   ('medium.com',              'newsletters'),
   ('substack.com',            'newsletters'),
   ('globalai.community',      'newsletters'),
-  ('llamaindex.ai',           'newsletters')
+  ('llamaindex.ai',           'newsletters'),
+  -- Global News Sites (15) — reputable, English-language outlets; gates the
+  -- Global and Regional tabs' Exa include_domains so results stay in English
+  -- and free of low-quality/spam domains (see
+  -- documents/newshub_global_regional_reputable_sources_2026-08-27.md)
+  ('ndtv.com',                 'global_news_sites'),
+  ('thehindu.com',             'global_news_sites'),
+  ('indianexpress.com',        'global_news_sites'),
+  ('reuters.com',              'global_news_sites'),
+  ('apnews.com',               'global_news_sites'),
+  ('bbc.com',                  'global_news_sites'),
+  ('nytimes.com',              'global_news_sites'),
+  ('wsj.com',                  'global_news_sites'),
+  ('bloomberg.com',            'global_news_sites'),
+  ('theguardian.com',          'global_news_sites'),
+  ('cnn.com',                  'global_news_sites'),
+  ('npr.org',                  'global_news_sites'),
+  ('axios.com',                'global_news_sites'),
+  ('economist.com',            'global_news_sites'),
+  ('aljazeera.com',            'global_news_sites')
 ON CONFLICT (domain, list_type) DO NOTHING;

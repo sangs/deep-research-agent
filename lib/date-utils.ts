@@ -42,6 +42,23 @@ export function formatIsoDateWithYear(dateStr: string | null): string | null {
 }
 
 /**
+ * Format an article's published_date regardless of which shape it arrives in
+ * — full ISO-8601 datetime (Exa-backed tabs: General/Regional/Curated/Research)
+ * or bare "YYYY-MM-DD" (Newsletter, via backend's format_header_date()).
+ * NewsCard renders articles from either source (a prior Newsletter run can be
+ * displayed through the generic NewsPanel/NewsCard path), so it needs a
+ * formatter that detects which shape it received instead of assuming one —
+ * blindly using formatIsoDateWithYear on a bare date would reintroduce the
+ * UTC-midnight off-by-one-day bug fixed 2026-08-05; blindly using
+ * formatBareDate on a full timestamp produces "Invalid Date" (a malformed
+ * double-timestamp string once T00:00:00 is appended).
+ */
+export function formatArticleDate(dateStr: string | null): string | null {
+  if (!dateStr) return null;
+  return dateStr.includes('T') ? formatIsoDateWithYear(dateStr) : formatBareDate(dateStr);
+}
+
+/**
  * Full ISO-8601 datetime → short date + time, e.g. "Aug 5, 2:15 PM".
  * Used for the digest "Generated ..." timestamp.
  */

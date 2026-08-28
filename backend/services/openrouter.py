@@ -113,6 +113,7 @@ async def _fetch_articles(name: str, args: dict, custom_domains: list[str] | Non
             num_results=args.get('num_results', 8),
             start_date=args['start_date'],
             end_date=args['end_date'],
+            include_domains=(await load_sources()).get('global_news_sites', []),
             category='news',
         )
     elif name == 'news_search_region':
@@ -123,6 +124,7 @@ async def _fetch_articles(name: str, args: dict, custom_domains: list[str] | Non
             num_results=args.get('num_results', 8),
             start_date=args['start_date'],
             end_date=args['end_date'],
+            include_domains=(await load_sources()).get('global_news_sites', []),
             category='news',
         )
     elif name == 'news_search_curated':
@@ -264,6 +266,8 @@ SEARCH STRATEGY: {default_mode_instruction}"""
         history_block = ''
 
     return f"""You are a news aggregation agent. Your job is to search for news and return a structured digest.
+
+LANGUAGE: All search queries must be in English, regardless of the topic's origin or the region being covered.
 
 TIME RANGE: {time_range}
 START DATE: {start}

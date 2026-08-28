@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { ExternalLink } from 'lucide-react';
-import { formatBareDate } from '@/lib/date-utils';
+import { formatArticleDate } from '@/lib/date-utils';
 
 export interface ArticleItem {
   title: string;
@@ -66,7 +66,7 @@ export function renderExcerpt(text: string) {
 
 export function NewsCard({ article, mode = 'general', id }: NewsCardProps) {
   const [open, setOpen] = useState(false);
-  const date = formatBareDate(article.published_date);
+  const date = formatArticleDate(article.published_date);
   const accent = modeAccent[mode] ?? modeAccent.general;
   const chip = sourceChip[mode] ?? sourceChip.general;
   const hasLinks = (article.links?.length ?? 0) > 0;
