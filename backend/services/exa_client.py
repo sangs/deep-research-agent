@@ -10,6 +10,32 @@ _client: Exa | None = None
 
 _PLACEHOLDER_DOMAINS = {'example.com', 'example.org', 'example.net', 'test.com', 'placeholder.com'}
 
+# Common non-Latin script Unicode ranges (CJK, Japanese kana, Korean hangul,
+# Arabic, Cyrillic, Devanagari). Reputable English-language outlets (e.g.
+# bbc.com) often also host localized foreign-language editions under the
+# same domain (e.g. bbc.com/zhongwen) — an include_domains allowlist alone
+# doesn't filter those out. This is a cheap script-detection heuristic, not
+# a language-detection library/dependency: it just flags titles that are
+# predominantly non-Latin script.
+_NON_LATIN_SCRIPT_RE = re.compile(
+    '['
+    '一-鿿'   # CJK unified ideographs (Chinese/Japanese kanji)
+    '぀-ヿ'   # Japanese hiragana/katakana
+    '가-힯'   # Korean hangul syllables
+    '؀-ۿ'   # Arabic
+    'Ѐ-ӿ'   # Cyrillic
+    'ऀ-ॿ'   # Devanagari
+    ']'
+)
+
+
+def _is_mostly_non_latin(text: str, threshold: float = 0.3) -> bool:
+    """True if more than `threshold` fraction of characters are non-Latin script."""
+    if not text:
+        return False
+    non_latin = len(_NON_LATIN_SCRIPT_RE.findall(text))
+    return non_latin / len(text) > threshold
+
 
 def _clean_excerpt(text: str) -> str:
     """Strip markdown/HTML noise from Exa page text to produce a clean readable excerpt."""
@@ -115,6 +141,8 @@ async def search_news(
         for r in results.results:
             url = r.url or ''
             if not _is_valid_url(url):
+                continue
+            if _is_mostly_non_latin(r.title or ''):
                 continue
             try:
                 source = url.split('/')[2].replace('www.', '') if url else ''

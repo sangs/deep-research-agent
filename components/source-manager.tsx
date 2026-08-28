@@ -28,16 +28,20 @@ export function SourceManager({ open, onClose }: SourceManagerProps) {
   const [domains, setDomains] = useState<string[]>([]);
   const [researchDomains, setResearchDomains] = useState<string[]>([]);
   const [newsletterDomains, setNewsletterDomains] = useState<string[]>([]);
+  const [globalNewsDomains, setGlobalNewsDomains] = useState<string[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [researchInputValue, setResearchInputValue] = useState('');
   const [newsletterInputValue, setNewsletterInputValue] = useState('');
+  const [globalNewsInputValue, setGlobalNewsInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [savingNews, setSavingNews] = useState(false);
   const [savingResearch, setSavingResearch] = useState(false);
   const [savingNewsletter, setSavingNewsletter] = useState(false);
+  const [savingGlobalNews, setSavingGlobalNews] = useState(false);
   const [newsError, setNewsError] = useState<string | null>(null);
   const [researchError, setResearchError] = useState<string | null>(null);
   const [newsletterError, setNewsletterError] = useState<string | null>(null);
+  const [globalNewsError, setGlobalNewsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) fetchSources();
@@ -51,6 +55,7 @@ export function SourceManager({ open, onClose }: SourceManagerProps) {
       setDomains(data.news_sites ?? []);
       setResearchDomains(data.research_sites ?? []);
       setNewsletterDomains(data.newsletters ?? []);
+      setGlobalNewsDomains(data.global_news_sites ?? []);
     } catch {
       // ignore
     } finally {
@@ -205,6 +210,55 @@ export function SourceManager({ open, onClose }: SourceManagerProps) {
     }
   }
 
+  async function addGlobalNewsDomain() {
+    const normalized = normalizeDomain(globalNewsInputValue);
+    if (!normalized) return;
+    if (globalNewsDomains.includes(normalized)) {
+      setGlobalNewsError(`${normalized} is already in the list.`);
+      return;
+    }
+    setGlobalNewsError(null);
+    setSavingGlobalNews(true);
+    try {
+      const res = await fetch('/api/sources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'add', domains: [normalized], list_type: 'global_news_sites' }),
+      });
+      if (res.ok) {
+        setGlobalNewsDomains((prev) => [...prev, normalized]);
+        setGlobalNewsInputValue('');
+      } else {
+        setGlobalNewsError('Failed to save. Is the backend running?');
+      }
+    } catch {
+      setGlobalNewsError('Network error — could not reach the backend.');
+    } finally {
+      setSavingGlobalNews(false);
+    }
+  }
+
+  async function removeGlobalNewsDomain(domain: string) {
+    setGlobalNewsError(null);
+    setSavingGlobalNews(true);
+    try {
+      const res = await fetch('/api/sources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'remove', domains: [domain], list_type: 'global_news_sites' }),
+      });
+      if (res.ok) {
+        setGlobalNewsDomains((prev) => prev.filter((d) => d !== domain));
+      } else {
+        setGlobalNewsError('Failed to remove. Is the backend running?');
+      }
+    } catch {
+      setGlobalNewsError('Network error — could not reach the backend.');
+    } finally {
+      setSavingGlobalNews(false);
+    }
+  }
+
   if (!open) return null;
 
   return (
@@ -218,6 +272,74 @@ export function SourceManager({ open, onClose }: SourceManagerProps) {
         </div>
 
         <div className="overflow-y-auto flex-1 p-4 space-y-5">
+
+          {/* ── Global News Sites ──────────────────────────────────── */}
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs font-semibold">Global News Sites</p>
+              <p className="text-xs text-muted-foreground">
+                Used by the <strong>Global</strong> and <strong>Regional</strong> panels — reputable,
+                English-language outlets. Results are restricted to this list only.
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <Input
+                placeholder="e.g. reuters.com or paste a full URL"
+                value={globalNewsInputValue}
+                onChange={(e) => { setGlobalNewsInputValue(e.target.value); setGlobalNewsError(null); }}
+                onKeyDown={(e) => e.key === 'Enter' && addGlobalNewsDomain()}
+                className="text-xs h-8"
+              />
+              <Button
+                size="sm"
+                className="h-8 px-3"
+                onClick={addGlobalNewsDomain}
+                disabled={savingGlobalNews || !globalNewsInputValue.trim()}
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+            </div>
+
+            {globalNewsError && (
+              <div className="flex items-center gap-1.5 text-destructive text-xs">
+                <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                {globalNewsError}
+              </div>
+            )}
+
+            <ScrollArea className="h-48">
+              {loading ? (
+                <p className="text-xs text-muted-foreground text-center py-4">Loading…</p>
+              ) : (
+                <div className="space-y-1">
+                  {globalNewsDomains.map((domain) => (
+                    <div
+                      key={domain}
+                      className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-muted group"
+                    >
+                      <span className="text-xs font-mono">{domain}</span>
+                      <button
+                        onClick={() => removeGlobalNewsDomain(domain)}
+                        className="opacity-0 group-hover:opacity-100 text-destructive transition-opacity"
+                        disabled={savingGlobalNews}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                  {globalNewsDomains.length === 0 && !loading && (
+                    <p className="text-xs text-muted-foreground text-center py-4">No sources yet.</p>
+                  )}
+                </div>
+              )}
+            </ScrollArea>
+            <p className="text-xs text-muted-foreground">
+              {globalNewsDomains.length} site{globalNewsDomains.length !== 1 ? 's' : ''} · Changes save automatically
+            </p>
+          </div>
+
+          <Separator />
 
           {/* ── News Sites & Blogs ─────────────────────────────────── */}
           <div className="space-y-3">
