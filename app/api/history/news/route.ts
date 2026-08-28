@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
   const userId = getUserId(req);
   if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
 
-  const { cacheKey, digest, ttlSeconds, mode, locked, label, articleCount, rangeStart, rangeEnd } = await req.json();
+  const { cacheKey, digest, ttlSeconds, mode, locked, label, tags, articleCount, rangeStart, rangeEnd } = await req.json();
   if (!cacheKey || !digest) {
     return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
   }
@@ -66,6 +66,7 @@ export async function POST(req: NextRequest) {
       mode: mode ?? null,
       locked: !!locked,
       label: label ?? null,
+      tags: tags ?? [],
       articleCount: articleCount ?? 0,
       rangeStart: rangeStart ?? null,
       rangeEnd: rangeEnd ?? null,
@@ -79,6 +80,7 @@ export async function POST(req: NextRequest) {
         mode: mode ?? null,
         locked: !!locked,
         label: label ?? null,
+        tags: tags ?? [],
         articleCount: articleCount ?? 0,
         rangeStart: rangeStart ?? null,
         rangeEnd: rangeEnd ?? null,
@@ -90,17 +92,25 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
-// PATCH /api/history/news — rename a saved digest (label only; no digest/expiry change)
+// PATCH /api/history/news — rename and/or retag a saved digest (no digest/expiry change).
+// Only fields actually present in the request body are updated — omitting `tags` leaves
+// existing tags untouched, omitting `label` leaves the existing label untouched.
 export async function PATCH(req: NextRequest) {
   const userId = getUserId(req);
   if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
 
-  const { cacheKey, label } = await req.json();
+  const body = await req.json();
+  const { cacheKey } = body;
   if (!cacheKey) return NextResponse.json({ error: 'Missing key' }, { status: 400 });
+
+  const set: { label?: string | null; tags?: string[] } = {};
+  if ('label' in body) set.label = body.label ?? null;
+  if ('tags' in body) set.tags = body.tags ?? [];
+  if (Object.keys(set).length === 0) return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
 
   await db
     .update(newsDigests)
-    .set({ label: label ?? null })
+    .set(set)
     .where(and(eq(newsDigests.cacheKey, cacheKey), eq(newsDigests.userId, userId)));
 
   return NextResponse.json({ ok: true });

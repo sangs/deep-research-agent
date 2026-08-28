@@ -3,10 +3,28 @@
 import { useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { X, LockOpen, Bookmark, Pencil, Check, Loader2 } from 'lucide-react';
-import { formatRelativeTime, formatBareDate } from '@/lib/date-utils';
-import { listSavedDigests, renameDigest, clearCachedDigest } from '@/lib/history-client';
+import { X, LockOpen, Bookmark, Pencil, Check, Loader2, Tag, Plus } from 'lucide-react';
+import { formatRelativeTime } from '@/lib/date-utils';
+import { listSavedDigests, renameDigest, updateDigestTags, clearCachedDigest } from '@/lib/history-client';
 import type { SavedDigestMeta } from '@/lib/history-client';
+
+/** The mandatory YYYY-MM-DD (or YYYY-MM-DD_YYYY-MM-DD for a multi-day range)
+ *  suffix every saved digest's name carries — never editable, never omitted,
+ *  so the date a digest covers is always visible regardless of what custom
+ *  name (if any) the user gives it. */
+function dateSuffix(item: SavedDigestMeta): string {
+  if (!item.rangeStart) return '';
+  return item.rangeEnd && item.rangeEnd !== item.rangeStart
+    ? `${item.rangeStart}_${item.rangeEnd}`
+    : item.rangeStart;
+}
+
+/** Full displayed name: custom label (if any) + the mandatory date suffix, or
+ *  just the date suffix when no custom name has been set. */
+function displayName(item: SavedDigestMeta): string {
+  const suffix = dateSuffix(item);
+  return item.label ? `${item.label} ${suffix}` : suffix || 'Newsletter digest';
+}
 
 interface SavedDigestsDrawerProps {
   open: boolean;
@@ -22,6 +40,8 @@ export function SavedDigestsDrawer({ open, mode, onClose, onSelect }: SavedDiges
   const [loading, setLoading] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  const [taggingKey, setTaggingKey] = useState<string | null>(null);
+  const [tagInputValue, setTagInputValue] = useState('');
 
   // Fetch page 1 whenever the drawer opens
   useEffect(() => {
@@ -52,7 +72,8 @@ export function SavedDigestsDrawer({ open, mode, onClose, onSelect }: SavedDiges
 
   function startRename(item: SavedDigestMeta) {
     setEditingKey(item.cacheKey);
-    setEditValue(item.label ?? defaultTitle(item));
+    // Only the custom part is editable — the date suffix always re-appends on save
+    setEditValue(item.label ?? '');
   }
 
   async function commitRename(cacheKey: string) {
@@ -62,12 +83,27 @@ export function SavedDigestsDrawer({ open, mode, onClose, onSelect }: SavedDiges
     setEditingKey(null);
   }
 
-  function defaultTitle(item: SavedDigestMeta): string {
-    if (item.rangeStart && item.rangeEnd && item.rangeStart !== item.rangeEnd) {
-      return `${formatBareDate(item.rangeStart)} – ${formatBareDate(item.rangeEnd)}`;
+  function startAddTag(cacheKey: string) {
+    setTaggingKey(cacheKey);
+    setTagInputValue('');
+  }
+
+  async function commitAddTag(item: SavedDigestMeta) {
+    const tag = tagInputValue.trim();
+    if (!tag || item.tags.includes(tag)) {
+      setTagInputValue('');
+      return;
     }
-    if (item.rangeStart) return formatBareDate(item.rangeStart) ?? item.rangeStart;
-    return 'Newsletter digest';
+    const nextTags = [...item.tags, tag];
+    await updateDigestTags(item.cacheKey, nextTags);
+    setItems((prev) => prev.map((i) => (i.cacheKey === item.cacheKey ? { ...i, tags: nextTags } : i)));
+    setTagInputValue('');
+  }
+
+  async function removeTag(item: SavedDigestMeta, tag: string) {
+    const nextTags = item.tags.filter((t) => t !== tag);
+    await updateDigestTags(item.cacheKey, nextTags);
+    setItems((prev) => prev.map((i) => (i.cacheKey === item.cacheKey ? { ...i, tags: nextTags } : i)));
   }
 
   // Close on outside click / Escape
@@ -129,23 +165,26 @@ export function SavedDigestsDrawer({ open, mode, onClose, onSelect }: SavedDiges
               >
                 <div className="flex-1 min-w-0 cursor-pointer" onClick={() => { onSelect(item.cacheKey); onClose(); }}>
                   {editingKey === item.cacheKey ? (
-                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-1 flex-wrap" onClick={(e) => e.stopPropagation()}>
                       <input
                         autoFocus
+                        placeholder="Custom name (optional)"
                         value={editValue}
                         onChange={(e) => setEditValue(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') commitRename(item.cacheKey);
                           if (e.key === 'Escape') setEditingKey(null);
                         }}
-                        className="flex-1 text-xs rounded border border-input bg-background px-1.5 py-0.5"
+                        className="flex-1 min-w-0 text-xs rounded border border-input bg-background px-1.5 py-0.5"
                       />
+                      {/* Date suffix is always appended, never editable */}
+                      <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{dateSuffix(item)}</span>
                       <button onClick={() => commitRename(item.cacheKey)} className="text-primary shrink-0">
                         <Check className="h-3.5 w-3.5" />
                       </button>
                     </div>
                   ) : (
-                    <p className="text-xs font-medium truncate leading-snug">{item.label ?? defaultTitle(item)}</p>
+                    <p className="text-xs font-medium truncate leading-snug">{displayName(item)}</p>
                   )}
                   <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                     <Badge variant="secondary" className="text-[10px] h-4 px-1 py-0">
@@ -155,8 +194,48 @@ export function SavedDigestsDrawer({ open, mode, onClose, onSelect }: SavedDiges
                       Locked {formatRelativeTime(item.generatedAt)}
                     </span>
                   </div>
+                  {(item.tags.length > 0 || taggingKey === item.cacheKey) && (
+                    <div className="flex items-center gap-1 mt-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                      {item.tags.map((tag) => (
+                        <Badge
+                          key={tag}
+                          variant="outline"
+                          className="text-[9px] h-4 px-1.5 py-0 gap-1 border-primary/30 text-primary bg-primary/5"
+                        >
+                          <Tag className="h-2.5 w-2.5" />
+                          {tag}
+                          <button onClick={() => removeTag(item, tag)} aria-label={`Remove tag ${tag}`}>
+                            <X className="h-2.5 w-2.5" />
+                          </button>
+                        </Badge>
+                      ))}
+                      {taggingKey === item.cacheKey && (
+                        <input
+                          autoFocus
+                          placeholder="Add tag…"
+                          value={tagInputValue}
+                          onChange={(e) => setTagInputValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitAddTag(item);
+                            if (e.key === 'Escape') setTaggingKey(null);
+                          }}
+                          onBlur={() => setTaggingKey(null)}
+                          className="w-20 text-[10px] rounded border border-input bg-background px-1.5 py-0.5"
+                        />
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-0.5">
+                  {taggingKey !== item.cacheKey && (
+                    <button
+                      onClick={() => startAddTag(item.cacheKey)}
+                      className="text-muted-foreground hover:text-foreground"
+                      aria-label="Add tag"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   {editingKey !== item.cacheKey && (
                     <button
                       onClick={() => startRename(item)}

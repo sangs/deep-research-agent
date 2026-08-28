@@ -1,0 +1,1 @@
+ALTER TABLE "news_digests" ADD COLUMN "tags" text[] DEFAULT '{}' NOT NULL;
