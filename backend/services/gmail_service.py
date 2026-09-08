@@ -62,10 +62,12 @@ DIGEST_FOLDER  = 'Digest'              # used by standalone tool; kept for refer
 
 # Scale guardrails — a "past month" pull across many senders can return
 # hundreds of emails; these bound the work done per digest run.
-MAX_EMAILS_FETCH        = 500  # hard cap on emails fetched per digest run
-AUTO_BY_SOURCE_THRESHOLD = 60  # above this count, skip the single-prompt LLM
-                                # topic-cluster call (context/latency limits)
-                                # and auto-group by sender instead — O(n), always succeeds
+MAX_EMAILS_FETCH   = 500  # hard cap on emails fetched per digest run
+CLUSTER_BATCH_SIZE = 50   # topic-clustering LLM calls are split into batches of
+                           # this size (see _cluster_via_llm_batched) instead of
+                           # falling back to by-source grouping above a threshold —
+                           # keeps every LLM prompt small regardless of total email
+                           # count while still honoring an explicit "By topic" choice
 
 # Gmail OAuth scopes — modify permission allows labelling matched emails
 SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
@@ -221,9 +223,18 @@ def decode_body(payload) -> str:
 
 
 def extract_urls(text: str) -> list[str]:
-    """Extract http(s) URLs from plain text, filtering out tracking/utility links."""
+    """Extract http(s) URLs from plain text, filtering out tracking/utility links.
+
+    Decodes HTML entities (e.g. a visible-URL anchor text containing literal
+    &amp;) so this matches extract_hrefs()'s already-decoded output — without
+    this, the same destination URL can enter `links` twice in two differently
+    encoded forms (one from each extractor), both surviving dedup_key() as
+    distinct entries, and a mangled `&amp;amp;`-containing variant could win
+    pick_primary_link()'s scoring and become a broken clickable article link.
+    """
     raw = re.findall(r'https?://[^\s<>"{}|\\^`\[\]]*[^\s<>"{}|\\^`\[\].,;:!?]', text)
-    return [u for u in raw if not any(s in u.lower() for s in _URL_SKIP)]
+    decoded = [_HTML_ENTITY_RE.sub(lambda m: _HTML_ENTITIES[m.group()], u) for u in raw]
+    return [u for u in decoded if not any(s in u.lower() for s in _URL_SKIP)]
 
 
 _HREF_RE = re.compile(r'href\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
@@ -273,7 +284,14 @@ _COSMETIC_QUERY_PARAMS = {
 
 def dedup_key(url: str) -> str:
     """Normalize a URL for deduplication — strips cosmetic tracking params
-    but preserves other query params that may carry real link identity."""
+    but preserves other query params that may carry real link identity.
+
+    Decodes HTML entities defensively before parsing, so two encodings of the
+    same URL (one raw, one already-decoded) still normalize to the same key
+    even if some future extraction path forgets to decode at the source —
+    extract_urls() decodes at the source already; this is defense-in-depth.
+    """
+    url = _HTML_ENTITY_RE.sub(lambda m: _HTML_ENTITIES[m.group()], url)
     parsed = urlparse(url)
     kept = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
             if k.lower() not in _COSMETIC_QUERY_PARAMS]
@@ -532,6 +550,66 @@ Rules:
         return _group_by_source(emails)
 
 
+async def _cluster_via_llm_batched(
+    emails: list[dict],
+    emit_event: Callable[[dict], Awaitable[None]] | None = None,
+) -> tuple[list[list[int]], list[str]]:
+    """Cluster emails into topic groups, splitting into CLUSTER_BATCH_SIZE-sized
+    batches for large email counts instead of sending one giant prompt.
+
+    An explicit "By topic" choice from the user is always honored — unlike the
+    old AUTO_BY_SOURCE_THRESHOLD design (retired), which silently switched to
+    by-source grouping above a fixed email count regardless of what the user
+    asked for. Batching keeps every individual LLM prompt small (bounded by
+    CLUSTER_BATCH_SIZE) no matter how large the total email count gets, so
+    large Custom date ranges no longer need to fall back at all.
+
+    Same-labeled clusters across batches are merged (case-insensitive,
+    whitespace-normalized exact match) so the same topic doesn't fragment into
+    several small per-batch clusters. This is a simple exact-match merge, not
+    fuzzy/semantic matching — batches phrasing the same topic differently
+    (e.g. "OpenAI GPT-5 Release" vs "OpenAI GPT-5 Launch") won't merge; a
+    fuzzy/embedding-based merge pass is a possible future enhancement, not
+    built here.
+    """
+    if len(emails) <= CLUSTER_BATCH_SIZE:
+        return await _cluster_via_llm(emails)
+
+    batches = [emails[i:i + CLUSTER_BATCH_SIZE] for i in range(0, len(emails), CLUSTER_BATCH_SIZE)]
+    total_batches = len(batches)
+
+    merged_clusters: list[list[int]] = []
+    # label (normalized) -> index into merged_clusters, for exact-match merging
+    label_index: dict[str, int] = {}
+    merged_names: list[str] = []
+
+    offset = 0
+    for batch_num, batch in enumerate(batches, start=1):
+        if emit_event:
+            await emit_event({'type': 'searching', 'query': f'Clustering batch {batch_num}/{total_batches} ({len(batch)} emails)…'})
+
+        batch_clusters, batch_names = await _cluster_via_llm(batch)
+
+        for ids, name in zip(batch_clusters, batch_names):
+            global_ids = [offset + i for i in ids]
+            norm = name.strip().lower()
+            if norm in label_index:
+                merged_clusters[label_index[norm]].extend(global_ids)
+            else:
+                label_index[norm] = len(merged_clusters)
+                merged_clusters.append(global_ids)
+                merged_names.append(name)
+
+        offset += len(batch)
+
+    # Sort by cluster size descending, same convention as the single-batch path
+    paired = sorted(zip(merged_clusters, merged_names), key=lambda x: len(x[0]), reverse=True)
+    if not paired:
+        return [], []
+    clusters, names = zip(*paired)
+    return list(clusters), list(names)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # LLM SUMMARIZATION (replaces Anthropic SDK calls)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -775,20 +853,19 @@ async def run_gmail_digest(
         pass  # tagging failure is non-fatal
 
     # ── Step 4: Cluster ──────────────────────────────────────────────────────
-    # Above the threshold, skip the single-prompt LLM topic-cluster call —
-    # it doesn't scale (context/latency limits, silent fallback on failure)
-    # — and group by sender instead, which is O(n) and always succeeds.
-    effective_by_source = by_source or len(emails) > AUTO_BY_SOURCE_THRESHOLD
+    # The user's explicit by_source choice is always honored — large email
+    # counts no longer force a silent fallback to by-source grouping (that
+    # AUTO_BY_SOURCE_THRESHOLD design has been retired). Large "by topic"
+    # requests are instead handled by batching the LLM clustering call — see
+    # _cluster_via_llm_batched, which emits its own per-batch progress events.
     if emit_event:
-        mode_label = 'by source' if effective_by_source else 'by topic'
-        auto_note  = (f' (auto — {len(emails)} emails exceeds topic-clustering limit)'
-                      if effective_by_source and not by_source else '')
-        await emit_event({'type': 'searching', 'query': f'Clustering {len(emails)} emails {mode_label}{auto_note}…'})
+        mode_label = 'by source' if by_source else 'by topic'
+        await emit_event({'type': 'searching', 'query': f'Clustering {len(emails)} emails {mode_label}…'})
 
-    if effective_by_source:
+    if by_source:
         clusters, cluster_names = _group_by_source(emails)
     else:
-        clusters, cluster_names = await _cluster_via_llm(emails)
+        clusters, cluster_names = await _cluster_via_llm_batched(emails, emit_event)
 
     # ── Step 5: Summarize ────────────────────────────────────────────────────
     if emit_event:
