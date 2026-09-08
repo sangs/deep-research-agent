@@ -9,7 +9,7 @@ import { NewsPanel } from '@/components/news-panel';
 import { NewsletterDigestView } from '@/components/newsletter-digest-view';
 import { SavedDigestsDrawer } from '@/components/saved-digests-drawer';
 import { useNewsStream } from '@/components/news-display';
-import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, LockOpen, RefreshCw, Bookmark } from 'lucide-react';
+import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, LockOpen, Bookmark } from 'lucide-react';
 import { getCachedDigest, saveDigestToCache, clearCachedDigest, buildCacheKey, buildNewsletterCacheKey } from '@/lib/history-client';
 import { toLocalDateKey, resolveTimeRangeStart } from '@/lib/date-utils';
 
@@ -264,7 +264,10 @@ export function NewsCategoryPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, digest, fromCache]);
 
-  // Newsletter historical ranges: auto-save after every fresh run (no-expiry — permanent until Re-run fresh)
+  // Newsletter historical ranges: auto-save after every fresh run (no-expiry — permanent until Re-run fresh).
+  // Sets nlSavedToCache once the save resolves so nlIsLocked reflects reality —
+  // without this the cache-control bar had no way to know a historical range
+  // had already been auto-locked, and showed no Lock UI at all for it.
   useEffect(() => {
     if (
       mode === 'newsletter' &&
@@ -280,7 +283,7 @@ export function NewsCategoryPanel({
         articleCount: articleCount(digest),
         rangeStart: nlRangeStart,
         rangeEnd: nlRangeEnd,
-      });
+      }).then(() => setNlSavedToCache(true));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, digest, fromCache]);
@@ -442,8 +445,9 @@ export function NewsCategoryPanel({
                     type="date"
                     value={nlCustomStart}
                     max={todayStr}
+                    disabled={status === 'loading'}
                     onChange={(e) => setNlCustomStart(e.target.value)}
-                    className="rounded-md border border-input bg-background/60 px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="rounded-md border border-input bg-background/60 px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
                   />
                 </label>
                 <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -453,9 +457,10 @@ export function NewsCategoryPanel({
                     value={nlCustomEnd}
                     min={nlCustomStart || undefined}
                     max={todayStr}
+                    disabled={status === 'loading'}
                     onChange={(e) => setNlCustomEnd(e.target.value)}
                     placeholder={nlCustomStart}
-                    className="rounded-md border border-input bg-background/60 px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="rounded-md border border-input bg-background/60 px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
                   />
                 </label>
                 <span className="text-[10px] text-muted-foreground">
@@ -541,35 +546,34 @@ export function NewsCategoryPanel({
       )}
 
       {/* ── Newsletter cache control bar ─────────────────────────── */}
+      {/* Always driven by nlIsLocked, regardless of nlIncludesToday — a historical
+          (non-today) Custom/Week/Month range auto-locks itself right after a fresh
+          run (see the useEffect above), so it needs the SAME "Digest locked" +
+          "Unlock & re-run" UI as an explicitly-locked "today" digest, not a
+          separate "Re-run fresh only" branch with no Lock feedback at all. Before
+          the auto-save effect resolves, this briefly shows "Lock digest" — clicking
+          it just performs the same save the effect is already making, a harmless
+          no-op duplicate, not a bug. */}
       {mode === 'newsletter' && status === 'done' && latestRun && latestRun.digest.topics.length > 0 && nlCacheKey && (
         <div className="border-b px-4 py-2 flex items-center gap-3 bg-muted/10 flex-shrink-0">
-          {nlIncludesToday ? (
-            nlIsLocked ? (
-              <>
-                <span className="text-xs text-primary flex items-center gap-1">
-                  <Lock className="h-3 w-3" /> Digest locked{timeRange === 'today' ? ' for today' : ''}
-                </span>
-                <button
-                  onClick={handleNlUnlockAndRefresh}
-                  className="text-xs text-muted-foreground hover:text-destructive flex items-center gap-1 transition-colors ml-auto"
-                >
-                  <LockOpen className="h-3 w-3" /> Unlock &amp; re-run
-                </button>
-              </>
-            ) : (
+          {nlIsLocked ? (
+            <>
+              <span className="text-xs text-primary flex items-center gap-1">
+                <Lock className="h-3 w-3" /> Digest locked{timeRange === 'today' ? ' for today' : ''}
+              </span>
               <button
-                onClick={handleNlLock}
-                className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors"
+                onClick={handleNlUnlockAndRefresh}
+                className="text-xs text-muted-foreground hover:text-destructive flex items-center gap-1 transition-colors ml-auto"
               >
-                <Lock className="h-3 w-3" /> Lock digest{timeRange === 'today' ? ' for today' : ''}
+                <LockOpen className="h-3 w-3" /> Unlock &amp; re-run
               </button>
-            )
+            </>
           ) : (
             <button
-              onClick={handleNlUnlockAndRefresh}
-              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors ml-auto"
+              onClick={handleNlLock}
+              className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors"
             >
-              <RefreshCw className="h-3 w-3" /> Re-run fresh
+              <Lock className="h-3 w-3" /> Lock digest{timeRange === 'today' ? ' for today' : ''}
             </button>
           )}
         </div>
