@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { ExternalLink } from 'lucide-react';
 import { formatArticleDate } from '@/lib/date-utils';
+import { labelLinks } from '@/lib/link-utils';
 
 export interface ArticleItem {
   title: string;
@@ -129,23 +130,19 @@ export function NewsCard({ article, mode = 'general', id }: NewsCardProps) {
               <div className="space-y-2">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Links</p>
                 <ul className="space-y-1.5">
-                  {article.links!.map((link, i) => {
-                    let hostname = link;
-                    try { hostname = new URL(link).hostname.replace(/^www\./, ''); } catch {}
-                    return (
-                      <li key={i}>
-                        <a
-                          href={link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1.5 text-xs text-primary hover:underline"
-                        >
-                          <ExternalLink className="h-3 w-3 shrink-0" />
-                          <span className="truncate">{hostname}</span>
-                        </a>
-                      </li>
-                    );
-                  })}
+                  {labelLinks(article.links!).map(({ url, label }, i) => (
+                    <li key={i}>
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 text-xs text-primary hover:underline"
+                      >
+                        <ExternalLink className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{label}</span>
+                      </a>
+                    </li>
+                  ))}
                 </ul>
               </div>
             )}

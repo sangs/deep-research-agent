@@ -6,6 +6,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { ExternalLink, ChevronDown, AlertTriangle } from 'lucide-react';
 import { renderExcerpt } from '@/components/news-card';
 import { formatBareDate } from '@/lib/date-utils';
+import { labelLinks } from '@/lib/link-utils';
 import type { TopicCluster } from '@/components/topic-group';
 import type { ArticleItem } from '@/components/news-card';
 
@@ -201,25 +202,19 @@ export function NewsletterDigestView({ topics, truncated, totalCount }: Newslett
                       Links
                     </p>
                     <ul className="space-y-1.5">
-                      {openArticle.article.links!.map((link, i) => {
-                        let hostname = link;
-                        try {
-                          hostname = new URL(link).hostname.replace(/^www\./, '');
-                        } catch {}
-                        return (
-                          <li key={i}>
-                            <a
-                              href={link}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-1.5 text-xs text-primary hover:underline"
-                            >
-                              <ExternalLink className="h-3 w-3 shrink-0" />
-                              <span className="truncate">{hostname}</span>
-                            </a>
-                          </li>
-                        );
-                      })}
+                      {labelLinks(openArticle.article.links!).map(({ url, label }, i) => (
+                        <li key={i}>
+                          <a
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 text-xs text-primary hover:underline"
+                          >
+                            <ExternalLink className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{label}</span>
+                          </a>
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 )}
