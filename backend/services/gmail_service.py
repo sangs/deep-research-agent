@@ -222,6 +222,35 @@ def decode_body(payload) -> str:
     return ''
 
 
+# Trailing characters a plain-text URL regex can't distinguish from real URL
+# content when the source is markdown — e.g. the ')' closing a markdown link
+# '[text](url)', the '**' closing a bold span around one, or a bold-wrapped
+# colon immediately after a link ('...(url)**:**'). Never legitimate at the
+# very end of a real destination URL.
+_TRAILING_MD_PUNCT = ')*:'
+
+
+def _trim_trailing_markdown_junk(url: str) -> str:
+    """Iteratively strip trailing markdown-syntax punctuation a plain-text URL
+    regex can't tell apart from real URL characters. Many newsletters (this
+    one included) write their body in markdown, so this is a common,
+    sender-agnostic source of malformed extracted URLs, not a one-off —
+    e.g. '**[Join the Hackathon](https://x.com/r/vd8agqk)**' extracts as
+    'https://x.com/r/vd8agqk)**' without this.
+
+    A trailing ')' is only stripped while UNBALANCED (more ')' than '(' in
+    the string) — a URL that legitimately contains a matched parenthesis in
+    its own path (e.g. a Wikipedia disambiguation link) is left untouched.
+    '*' and ':' are always stripped from the end — neither is ever a
+    legitimate final character of a real destination URL.
+    """
+    while url and url[-1] in _TRAILING_MD_PUNCT:
+        if url[-1] == ')' and url.count(')') <= url.count('('):
+            break  # balanced trailing paren — genuinely part of the URL
+        url = url[:-1]
+    return url
+
+
 def extract_urls(text: str) -> list[str]:
     """Extract http(s) URLs from plain text, filtering out tracking/utility links.
 
@@ -234,7 +263,8 @@ def extract_urls(text: str) -> list[str]:
     """
     raw = re.findall(r'https?://[^\s<>"{}|\\^`\[\]]*[^\s<>"{}|\\^`\[\].,;:!?]', text)
     decoded = [_HTML_ENTITY_RE.sub(lambda m: _HTML_ENTITIES[m.group()], u) for u in raw]
-    return [u for u in decoded if not any(s in u.lower() for s in _URL_SKIP)]
+    trimmed = [_trim_trailing_markdown_junk(u) for u in decoded]
+    return [u for u in trimmed if not any(s in u.lower() for s in _URL_SKIP)]
 
 
 _HREF_RE = re.compile(r'href\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
@@ -258,6 +288,7 @@ def extract_hrefs(payload) -> list[str]:
         raw = base64.urlsafe_b64decode(body_data).decode('utf-8', errors='replace')
         for href in _HREF_RE.findall(raw):
             href = _HTML_ENTITY_RE.sub(lambda m: _HTML_ENTITIES[m.group()], href)
+            href = _trim_trailing_markdown_junk(href)
             if not href.lower().startswith(('http://', 'https://')):
                 continue  # skip mailto:, tel:, #anchor, javascript: etc.
             if any(s in href.lower() for s in _URL_SKIP):
