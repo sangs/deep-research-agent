@@ -49,3 +49,6 @@ __pycache__/
 
 # Local SQLite database
 data/
+
+# Gmail token refresh script config (deployment-specific values)
+backend/scripts/refresh_gmail_token.env
