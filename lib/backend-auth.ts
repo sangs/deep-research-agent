@@ -6,7 +6,7 @@
 //   → `Authorization: Bearer <id token>`; Cloud Run checks roles/run.invoker
 //   before the request reaches the container.
 //
-// When the GCP_* variables are not set (local dev against localhost:8000),
+// When the GCP_* variables are not set (local dev against localhost:8010),
 // backendAuthHeaders() returns {} and requests go out unauthenticated.
 
 import { wifProviderAudience, vercelOidcToken, federatedAccessToken, generateIdToken, jwtExpiryMs } from './gcp-wif';

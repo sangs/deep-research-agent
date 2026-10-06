@@ -1,6 +1,6 @@
 import { backendAuthHeaders } from '@/lib/backend-auth';
 
-const BACKEND_URL = (process.env.BACKEND_URL ?? 'http://localhost:8000').replace(/\/+$/, '');
+const BACKEND_URL = (process.env.BACKEND_URL ?? 'http://localhost:8010').replace(/\/+$/, '');
 
 // Large newsletter digests (month range, many senders) can take minutes to
 // fetch/cluster/summarize — the backend now streams progress incrementally
