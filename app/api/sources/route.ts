@@ -1,6 +1,6 @@
 import { db } from '@/drizzle/db';
 import { curatedSources } from '@/drizzle/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 
 export async function GET(): Promise<Response> {
@@ -28,12 +28,12 @@ export async function POST(req: Request): Promise<Response> {
     for (const raw of domains as string[]) {
       const domain = raw.toLowerCase().trim();
       if (!domain) continue;
-      const existing = await db.select().from(curatedSources)
-        .where(eq(curatedSources.domain, domain));
-      if (existing.length === 0) {
-        await db.insert(curatedSources).values({ id: randomUUID(), domain, listType, addedAt: now });
-        added.push(domain);
-      }
+      // One row per (domain, list_type): the same domain may be in several lists.
+      const inserted = await db.insert(curatedSources)
+        .values({ id: randomUUID(), domain, listType, addedAt: now })
+        .onConflictDoNothing({ target: [curatedSources.domain, curatedSources.listType] })
+        .returning({ domain: curatedSources.domain });
+      if (inserted.length > 0) added.push(domain);
     }
     const total = await db.select().from(curatedSources).where(eq(curatedSources.listType, listType));
     return Response.json({ added, total: total.length, list_type: listType });
@@ -43,8 +43,11 @@ export async function POST(req: Request): Promise<Response> {
     const removed: string[] = [];
     for (const raw of domains as string[]) {
       const domain = raw.toLowerCase().trim();
-      await db.delete(curatedSources).where(eq(curatedSources.domain, domain));
-      removed.push(domain);
+      // Remove from this list only; other lists keep the domain.
+      const deleted = await db.delete(curatedSources)
+        .where(and(eq(curatedSources.domain, domain), eq(curatedSources.listType, listType)))
+        .returning({ domain: curatedSources.domain });
+      if (deleted.length > 0) removed.push(domain);
     }
     const total = await db.select().from(curatedSources).where(eq(curatedSources.listType, listType));
     return Response.json({ removed, total: total.length, list_type: listType });

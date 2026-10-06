@@ -1,184 +1,94 @@
 # Deep Research Agent
 
-An AI-powered research agent built with Next.js 15 and the AI SDK. Submit a research query and the agent autonomously searches the web using Exa, streams results in real-time, and synthesizes findings with sources.
+An AI research suite built with Next.js 16 and the AI SDK v6, with two sections:
+
+- **Deep Research**: an agent that searches the web (Exa) over several steps, streams its progress, and writes a cited report.
+- **News Hub**: tabbed AI-curated news (Global, Regional, Blogs & Sites, Research) plus a **Newsletter** digest of a Gmail inbox, served by a Python FastMCP + Starlette backend.
+
+Sign-in is required: Google accounts on an email allowlist (Auth.js). In production the backend is a **private** Cloud Run
+service that the Vercel app calls with keyless Workload Identity Federation (no stored Google keys).
 
 ## Prerequisites
 
-- Node.js 18+
-- An [OpenRouter](https://openrouter.ai) API key
-- An [Exa](https://exa.ai) API key
+- Node.js 20+
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/)
+- [gcloud](https://cloud.google.com/sdk/docs/install), signed in (`gcloud auth login`) with access to the GCP project. Locally, the
+  sign-in secrets are read from Secret Manager with your gcloud login
+- API keys: [OpenRouter](https://openrouter.ai), [Exa](https://exa.ai); a Supabase Postgres `DATABASE_URL`
 
-## Local Setup
+## Local setup
 
 ### 1. Install dependencies
 
 ```bash
 npm install
+cd backend && uv sync && cd ..
 ```
 
-### 2. Configure environment variables
+### 2. Environment
 
-Create a `.env.local` file in the project root:
+`.env.local` (project root, gitignored):
 
 ```bash
-OPENROUTER_API_KEY=your_openrouter_api_key
-EXA_API_KEY=your_exa_api_key
+OPENROUTER_API_KEY=...
+EXA_API_KEY=...
+DATABASE_URL=...
+# Google sign-in. Not secrets: the OAuth client secret and session key are read from
+# GCP Secret Manager at runtime (your gcloud login locally, Workload Identity Federation on Vercel)
+AUTH_GOOGLE_ID=<oauth web client id>
+AUTH_ALLOWED_EMAILS=you@example.com            # comma-separated allowlist
+GCP_PROJECT_NUMBER=<gcp project number>
+# Optional: BACKEND_URL defaults to http://localhost:8010
 ```
 
-### 3. Start the development server
+`backend/.env` holds `OPENROUTER_API_KEY`, `EXA_API_KEY`, `DATABASE_URL` for the Python backend. The Newsletter tab also needs a Gmail
+OAuth token at `~/gmail_token.json` (see `services/gmail_service.py` for the one-time setup).
+
+### 3. Start both services
 
 ```bash
+# Terminal 1: backend on port 8010 (8000 is left free for other local projects)
+cd backend && uv run uvicorn main:app --reload --port 8010
+
+# Terminal 2: frontend on port 3001
 npm run dev
 ```
 
-The app runs at **http://localhost:3001**.
+Open **http://localhost:3001**, sign in with an allowlisted Google account, then use **Deep Research** or **News Hub**.
+The OAuth client must list `http://localhost:3001/api/auth/callback/google` as a redirect URI.
 
-## Usage
+### 4. Health check
 
-1. Open http://localhost:3001 in your browser
-2. Enter a research question in the search box
-3. The agent will search the web iteratively (up to 10 steps) and stream results as it works
-4. Sources and synthesized findings appear in real-time
+| Check | Command | Expected |
+|---|---|---|
+| Backend up | `curl -s -X POST localhost:8010/digest -d x` | `{"error":"invalid json"}` |
+| Frontend gate | `curl -s -o /dev/null -w '%{http_code}\n' localhost:3001/api/sources` | `401` (sign-in required) |
+| Sign-in config (reads secrets via gcloud) | `curl -s localhost:3001/api/auth/providers` | JSON with `"google"` |
 
-## Other Commands
+## Commands
 
 ```bash
+npm run dev      # Next.js dev server (http://localhost:3001)
 npm run build    # Production build + type check
-npm run lint     # Run ESLint
+npm run lint     # ESLint
 npx tsc --noEmit # Type check only
 ```
 
----
+## MCP server
 
-## Applied-Research Skill — News Intelligence Hub
+The backend also exposes its news tools over MCP (streamable HTTP) at **`/mcp/mcp`**: `news_search_general`, `news_search_region`,
+`news_search_curated`, `news_search_research`, `manage_sources`, `get_news_digest`.
 
-The News Hub is an additional skill that adds AI-aggregated news from global sources, curated newsletters, or by region. It requires a separate Python backend (FastMCP) running alongside the Next.js app.
+> **Known issue:** `/mcp/mcp` currently returns HTTP 500 (`Task group is not initialized`). The FastMCP app's lifespan isn't
+> passed to the parent Starlette app in `backend/main.py`. The fix is pending.
 
-### Prerequisites
+- Local: `http://localhost:8010/mcp/mcp`
+- Production (private Cloud Run): open an authenticated tunnel, then point the MCP client at the tunnel:
+  ```bash
+  gcloud run services proxy backend --region=us-central1 --project=<gcp-project-id>   # → http://localhost:8080/mcp/mcp
+  ```
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) package manager
+## Gmail token refresh (production)
 
-### 1. Set up the Python backend
-
-```bash
-cd backend
-uv sync          # install dependencies from pyproject.toml
-```
-
-The backend reads API keys from `backend/.env` (already populated with the same keys as `.env.local`).
-
-### 2. Start the services
-
-Open two terminals from the `deep-research-agent/` directory.
-
-**Terminal 1 — Python MCP backend (port 8000)**
-
-Start the server and redirect logs to a file so you can tail them separately:
-
-```bash
-cd backend
-uv run python main.py > /tmp/backend.log 2>&1 &
-echo "Backend PID: $!"
-```
-
-Tail the backend log in the same terminal:
-
-```bash
-tail -f /tmp/backend.log
-```
-
-Expected startup output:
-
-```
-INFO:     Started server process [<pid>]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-```
-
-**Terminal 2 — Next.js frontend (port 3001)**
-
-Start the dev server and redirect logs:
-
-```bash
-npm run dev > /tmp/frontend.log 2>&1 &
-echo "Frontend PID: $!"
-```
-
-Tail the frontend log in the same terminal:
-
-```bash
-tail -f /tmp/frontend.log
-```
-
-Expected startup output:
-
-```
-▲ Next.js 16.x
-- Local: http://localhost:3001
-✓ Ready in Xs
-```
-
-### 3. Health check
-
-After both services start, verify they are healthy:
-
-| Check | Command | Expected |
-|-------|---------|----------|
-| Backend process listening | `lsof -ti :8000` | Returns a PID |
-| Frontend process listening | `lsof -ti :3001` | Returns a PID |
-| Backend `/sources` endpoint | `curl -s http://localhost:8000/sources` | JSON with `"news_sites"` array of 20 domains and `"newsletters": []` |
-| Frontend `/news` route | `curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/news` | `200` |
-
-Run all four checks in one shot:
-
-```bash
-echo "Backend PID : $(lsof -ti :8000)"
-echo "Frontend PID: $(lsof -ti :3001)"
-echo "Backend /sources:" && curl -s http://localhost:8000/sources
-echo ""
-echo "Frontend /news HTTP:" && curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3001/news
-```
-
-### 4. Stop the services
-
-```bash
-kill $(lsof -ti :8000)   # stop backend
-kill $(lsof -ti :3001)   # stop frontend
-```
-
-### 5. Open the News Hub
-
-Navigate to **http://localhost:3001/news**
-
-The dashboard has four independent panels that all run simultaneously when you click **Run**:
-
-| Panel | Description |
-|-------|-------------|
-| **Global News** | Breaking and trending news from worldwide sources |
-| **Regional News** | News filtered to the selected region (US, India, Europe, APAC, UK, LatAm) |
-| **News Sites & Blogs** | AI/ML coverage from 20 curated tech news sites and engineering blogs |
-| **Newsletter Subscriptions** | Placeholder — Gmail integration coming soon |
-
-**Workflow:**
-
-1. *(Optional)* Type a natural-language question in the text box — e.g. `"AI/ML news from thoughtworks and infoq"` or `"Fintech news with high scale database usage"`. The question overrides or sharpens the filter selections.
-2. Choose a **time range** (Today / Yesterday / Past Week / Past Month).
-3. Choose a **region** for the Regional News panel.
-4. Click **Run** — all three live panels fetch simultaneously; search progress badges stream in each panel header in real time.
-5. Click **Manage Sources** to add or remove domains from the News Sites & Blogs panel. Changes persist to `backend/config/default_sources.json`.
-
-### Connecting Claude Code to the MCP server
-
-Add to `~/.claude/settings.json` to expose the news tools directly to Claude Code:
-
-```json
-{
-  "mcpServers": {
-    "news-hub": { "url": "http://localhost:8000/mcp/sse" }
-  }
-}
-```
-
-Available MCP tools: `news_search_general`, `news_search_region`, `news_search_curated`, `manage_sources`, `get_news_digest`.
+When the Newsletter tab fails with `invalid_grant`, run `./backend/scripts/refresh_gmail_token.sh` after creating
+`backend/scripts/refresh_gmail_token.env` from the `.env.example` next to it (gitignored; holds the project ID and backend URL).

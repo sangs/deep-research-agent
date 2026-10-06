@@ -1,0 +1,11 @@
+# Files never uploaded by `gcloud builds submit` (Cloud Build source upload).
+# Keep local credentials and build junk out of the build bucket.
+.gcloudignore
+.git
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+scripts/*.env
+!scripts/*.env.example

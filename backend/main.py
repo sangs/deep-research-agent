@@ -128,7 +128,9 @@ def create_app():
         Route('/digest', endpoint=digest_endpoint, methods=['POST']),
     ]
 
-    app = Starlette(routes=routes)
+    # The MCP sub-app's lifespan starts its session manager (task group);
+    # without it every /mcp request fails with "Task group is not initialized".
+    app = Starlette(routes=routes, lifespan=mcp_app.lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=['*'],
@@ -145,5 +147,6 @@ app = create_app()
 
 if __name__ == '__main__':
     import uvicorn
-    port = int(os.getenv('PORT', '8000'))
+    # 8010 locally (8000 is often taken, e.g. by cortex-drive); Cloud Run sets PORT.
+    port = int(os.getenv('PORT', '8010'))
     uvicorn.run('main:app', host='0.0.0.0', port=port, reload=False)
