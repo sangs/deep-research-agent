@@ -28,19 +28,47 @@ async def load_sources() -> dict:
     return result
 
 
-async def persist_sources(data: dict) -> None:
-    """Replace the entire source list atomically."""
+async def add_sources(list_type: str, domains: list[str]) -> list[str]:
+    """Add domains to one list. Rows are unique per (domain, list_type), so the
+    same domain can sit in several lists; returns the domains actually added."""
     pool = await get_pool()
+    added: list[str] = []
     async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute("DELETE FROM curated_sources")
-            for list_type, domains in data.items():
-                for domain in domains:
-                    await conn.execute(
-                        "INSERT INTO curated_sources (id, domain, list_type, added_at) "
-                        "VALUES (gen_random_uuid(), $1, $2, $3)",
-                        domain, list_type, int(time.time() * 1000)
-                    )
+        for domain in domains:
+            status = await conn.execute(
+                "INSERT INTO curated_sources (id, domain, list_type, added_at) "
+                "VALUES (gen_random_uuid(), $1, $2, $3) "
+                "ON CONFLICT (domain, list_type) DO NOTHING",
+                domain, list_type, int(time.time() * 1000),
+            )
+            if status.endswith(' 1'):
+                added.append(domain)
+    return added
+
+
+async def remove_sources(list_type: str, domains: list[str]) -> list[str]:
+    """Remove domains from one list only (other lists keep them); returns the
+    domains actually removed."""
+    pool = await get_pool()
+    removed: list[str] = []
+    async with pool.acquire() as conn:
+        for domain in domains:
+            status = await conn.execute(
+                "DELETE FROM curated_sources WHERE domain = $1 AND list_type = $2",
+                domain, list_type,
+            )
+            if status != 'DELETE 0':
+                removed.append(domain)
+    return removed
+
+
+def normalize_domains(domains: list[str]) -> list[str]:
+    seen: list[str] = []
+    for d in domains:
+        d = d.lower().strip()
+        if d and d not in seen:
+            seen.append(d)
+    return seen
 
 
 def register_tools(mcp) -> None:
@@ -145,14 +173,12 @@ def register_tools(mcp) -> None:
         """
         Manage the news_sites, research_sites, or global_news_sites domain list.
         action='list'   → returns current lists
-        action='add'    → adds domains to list_type, persists to Supabase curated_sources table
-        action='remove' → removes domains from list_type, persists to Supabase curated_sources table
+        action='add'    → adds domains to list_type only (Supabase curated_sources, one row per domain+list)
+        action='remove' → removes domains from list_type only; other lists are untouched
         list_type: 'news_sites' (default), 'research_sites', or 'global_news_sites'
         """
-        data = await load_sources()
-        target_list: list[str] = data.get(list_type, [])
-
         if action == 'list':
+            data = await load_sources()
             return {
                 'action': 'list',
                 'news_sites': data.get('news_sites', []),
@@ -162,26 +188,14 @@ def register_tools(mcp) -> None:
             }
 
         elif action == 'add':
-            added = []
-            for d in domains:
-                d = d.lower().strip()
-                if d and d not in target_list:
-                    target_list.append(d)
-                    added.append(d)
-            data[list_type] = target_list
-            await persist_sources(data)
-            return {'action': 'add', 'list_type': list_type, 'added': added, 'total': len(target_list)}
+            added = await add_sources(list_type, normalize_domains(domains))
+            total = len((await load_sources()).get(list_type, []))
+            return {'action': 'add', 'list_type': list_type, 'added': added, 'total': total}
 
         elif action == 'remove':
-            removed = []
-            for d in domains:
-                d = d.lower().strip()
-                if d in target_list:
-                    target_list.remove(d)
-                    removed.append(d)
-            data[list_type] = target_list
-            await persist_sources(data)
-            return {'action': 'remove', 'list_type': list_type, 'removed': removed, 'total': len(target_list)}
+            removed = await remove_sources(list_type, normalize_domains(domains))
+            total = len((await load_sources()).get(list_type, []))
+            return {'action': 'remove', 'list_type': list_type, 'removed': removed, 'total': total}
 
         return {'error': f'Unknown action: {action}'}
 
