@@ -2,14 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/drizzle/db';
 import { researchSessions } from '@/drizzle/schema';
 import { eq, and, desc } from 'drizzle-orm';
+import { sessionUserId } from '@/lib/user-id';
 
-function getUserId(req: NextRequest): string | null {
-  return req.headers.get('X-User-Id');
-}
 
 // GET /api/history/research — list sessions for this user
-export async function GET(req: NextRequest) {
-  const userId = getUserId(req);
+export async function GET() {
+  const userId = await sessionUserId();
   if (!userId) return NextResponse.json([], { status: 200 });
 
   const rows = await db
@@ -29,7 +27,7 @@ export async function GET(req: NextRequest) {
 
 // POST /api/history/research — upsert a session
 export async function POST(req: NextRequest) {
-  const userId = getUserId(req);
+  const userId = await sessionUserId();
   if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
 
   const { id, title, messages } = await req.json();
@@ -67,8 +65,8 @@ export async function POST(req: NextRequest) {
 }
 
 // DELETE /api/history/research — delete ALL sessions for this user (bulk clear)
-export async function DELETE(req: NextRequest) {
-  const userId = getUserId(req);
+export async function DELETE() {
+  const userId = await sessionUserId();
   if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
 
   await db.delete(researchSessions).where(eq(researchSessions.userId, userId));

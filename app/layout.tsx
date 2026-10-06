@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { DM_Serif_Display, Plus_Jakarta_Sans, Geist_Mono } from "next/font/google";
 import { NavLinks } from "@/components/nav-links";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { LogOut } from "lucide-react";
+import { signOut } from "@/auth";
 import { SectionProvider } from "@/context/section-context";
 import "./globals.css";
 
@@ -59,6 +61,21 @@ export default function RootLayout({
               <span className="hidden sm:inline text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Research Suite</span>
               <NavLinks />
               <ThemeToggle />
+              <form
+                action={async () => {
+                  "use server";
+                  await signOut({ redirectTo: "/" });
+                }}
+              >
+                <button
+                  type="submit"
+                  title="Sign out"
+                  aria-label="Sign out"
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </form>
             </div>
           </nav>
           {children}

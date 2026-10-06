@@ -2,14 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/drizzle/db';
 import { researchSessions } from '@/drizzle/schema';
 import { eq, and } from 'drizzle-orm';
+import { sessionUserId } from '@/lib/user-id';
 
-function getUserId(req: NextRequest): string | null {
-  return req.headers.get('X-User-Id');
-}
 
 // GET /api/history/research/[id] — load full messages for one session
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const userId = getUserId(req);
+  const userId = await sessionUserId();
   if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
 
   const { id } = await params;
@@ -26,7 +24,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
 // DELETE /api/history/research/[id] — delete a session
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const userId = getUserId(req);
+  const userId = await sessionUserId();
   if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
 
   const { id } = await params;

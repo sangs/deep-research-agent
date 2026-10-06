@@ -1,4 +1,3 @@
-import { getUserId } from './user-id';
 import { resolveTimeRangeStart } from './date-utils';
 import type { NewsDigest } from '@/components/news-dashboard';
 
@@ -10,11 +9,8 @@ export interface SessionMeta {
 }
 
 export async function listResearchSessions(): Promise<SessionMeta[]> {
-  const userId = getUserId();
-  if (!userId) return [];
   try {
     const res = await fetch('/api/history/research', {
-      headers: { 'X-User-Id': userId },
     });
     if (!res.ok) return [];
     return res.json();
@@ -24,11 +20,8 @@ export async function listResearchSessions(): Promise<SessionMeta[]> {
 }
 
 export async function loadResearchSession(id: string): Promise<unknown[] | null> {
-  const userId = getUserId();
-  if (!userId) return null;
   try {
     const res = await fetch(`/api/history/research/${id}`, {
-      headers: { 'X-User-Id': userId },
     });
     if (!res.ok) return null;
     const { messages } = await res.json();
@@ -39,12 +32,10 @@ export async function loadResearchSession(id: string): Promise<unknown[] | null>
 }
 
 export async function saveResearchSession(id: string, title: string, messages: unknown[]): Promise<void> {
-  const userId = getUserId();
-  if (!userId) return;
   try {
     await fetch('/api/history/research', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id, title, messages }),
     });
   } catch {
@@ -53,29 +44,20 @@ export async function saveResearchSession(id: string, title: string, messages: u
 }
 
 export async function deleteResearchSession(id: string): Promise<void> {
-  const userId = getUserId();
-  if (!userId) return;
   await fetch(`/api/history/research/${id}`, {
     method: 'DELETE',
-    headers: { 'X-User-Id': userId },
   });
 }
 
 export async function clearAllResearchSessions(): Promise<void> {
-  const userId = getUserId();
-  if (!userId) return;
   await fetch('/api/history/research', {
     method: 'DELETE',
-    headers: { 'X-User-Id': userId },
   });
 }
 
 export async function getCachedDigest(cacheKey: string): Promise<NewsDigest | null> {
-  const userId = getUserId();
-  if (!userId) return null;
   try {
     const res = await fetch(`/api/history/news?key=${encodeURIComponent(cacheKey)}`, {
-      headers: { 'X-User-Id': userId },
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -110,12 +92,10 @@ export async function saveDigestToCache(
     rangeEnd?: string;
   }
 ): Promise<void> {
-  const userId = getUserId();
-  if (!userId) return;
   try {
     await fetch('/api/history/news', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cacheKey, digest, ttlSeconds, ...meta }),
     });
   } catch {
@@ -124,12 +104,9 @@ export async function saveDigestToCache(
 }
 
 export async function clearCachedDigest(cacheKey: string): Promise<void> {
-  const userId = getUserId();
-  if (!userId) return;
   try {
     await fetch(`/api/history/news?key=${encodeURIComponent(cacheKey)}`, {
       method: 'DELETE',
-      headers: { 'X-User-Id': userId },
     });
   } catch {
     // ignore errors silently
@@ -138,11 +115,8 @@ export async function clearCachedDigest(cacheKey: string): Promise<void> {
 
 /** List saved (locked) digests for a mode, newest first — lightweight metadata only. */
 export async function listSavedDigests(mode: string, offset = 0): Promise<{ items: SavedDigestMeta[]; hasMore: boolean }> {
-  const userId = getUserId();
-  if (!userId) return { items: [], hasMore: false };
   try {
     const res = await fetch(`/api/history/news/list?mode=${encodeURIComponent(mode)}&offset=${offset}`, {
-      headers: { 'X-User-Id': userId },
     });
     if (!res.ok) return { items: [], hasMore: false };
     return res.json();
@@ -152,12 +126,10 @@ export async function listSavedDigests(mode: string, offset = 0): Promise<{ item
 }
 
 export async function renameDigest(cacheKey: string, label: string | null): Promise<void> {
-  const userId = getUserId();
-  if (!userId) return;
   try {
     await fetch('/api/history/news', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cacheKey, label }),
     });
   } catch {
@@ -167,12 +139,10 @@ export async function renameDigest(cacheKey: string, label: string | null): Prom
 
 /** Full-replace a digest's tag list (simplest — a handful of tags per digest, no need for granular add/remove endpoints). */
 export async function updateDigestTags(cacheKey: string, tags: string[]): Promise<void> {
-  const userId = getUserId();
-  if (!userId) return;
   try {
     await fetch('/api/history/news', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cacheKey, tags }),
     });
   } catch {

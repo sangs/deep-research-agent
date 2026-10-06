@@ -2,16 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/drizzle/db';
 import { newsDigests } from '@/drizzle/schema';
 import { eq, and, desc } from 'drizzle-orm';
+import { sessionUserId } from '@/lib/user-id';
 
-function getUserId(req: NextRequest): string | null {
-  return req.headers.get('X-User-Id');
-}
 
 // GET /api/history/news/list?mode=newsletter&limit=20&offset=0 — lightweight
 // metadata for the Saved Digests picker. Never touches the `digest` JSON
 // blob column, so the list stays cheap even with hundreds of saved digests.
 export async function GET(req: NextRequest) {
-  const userId = getUserId(req);
+  const userId = await sessionUserId();
   if (!userId) return NextResponse.json({ items: [], hasMore: false });
 
   const mode = req.nextUrl.searchParams.get('mode') ?? 'newsletter';
