@@ -2,18 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/drizzle/db';
 import { newsDigests } from '@/drizzle/schema';
 import { eq, and, gt } from 'drizzle-orm';
+import { sessionUserId } from '@/lib/user-id';
 
 // Override with NEWS_DIGEST_TTL_SECONDS env var (in Vercel or .env.local). Default: 1 hour.
 // Note: changing this only affects new saves — existing cached rows keep their original expires_at.
 const DIGEST_TTL_SECONDS = parseInt(process.env.NEWS_DIGEST_TTL_SECONDS ?? '3600', 10);
 
-function getUserId(req: NextRequest): string | null {
-  return req.headers.get('X-User-Id');
-}
 
 // GET /api/history/news?key=... — load cached digest if fresh
 export async function GET(req: NextRequest) {
-  const userId = getUserId(req);
+  const userId = await sessionUserId();
   if (!userId) return NextResponse.json({ digest: null });
 
   const cacheKey = req.nextUrl.searchParams.get('key');
@@ -40,7 +38,7 @@ export async function GET(req: NextRequest) {
 
 // POST /api/history/news — save a digest
 export async function POST(req: NextRequest) {
-  const userId = getUserId(req);
+  const userId = await sessionUserId();
   if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
 
   const { cacheKey, digest, ttlSeconds, mode, locked, label, tags, articleCount, rangeStart, rangeEnd } = await req.json();
@@ -96,7 +94,7 @@ export async function POST(req: NextRequest) {
 // Only fields actually present in the request body are updated — omitting `tags` leaves
 // existing tags untouched, omitting `label` leaves the existing label untouched.
 export async function PATCH(req: NextRequest) {
-  const userId = getUserId(req);
+  const userId = await sessionUserId();
   if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
 
   const body = await req.json();
@@ -118,7 +116,7 @@ export async function PATCH(req: NextRequest) {
 
 // DELETE /api/history/news?key=... — remove a cached digest (Newsletter unlock / force-refresh)
 export async function DELETE(req: NextRequest) {
-  const userId = getUserId(req);
+  const userId = await sessionUserId();
   if (!userId) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
 
   const cacheKey = req.nextUrl.searchParams.get('key');
