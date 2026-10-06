@@ -79,9 +79,6 @@ npx tsc --noEmit # Type check only
 The backend also exposes its news tools over MCP (streamable HTTP) at **`/mcp/mcp`**: `news_search_general`, `news_search_region`,
 `news_search_curated`, `news_search_research`, `manage_sources`, `get_news_digest`.
 
-> **Known issue:** `/mcp/mcp` currently returns HTTP 500 (`Task group is not initialized`). The FastMCP app's lifespan isn't
-> passed to the parent Starlette app in `backend/main.py`. The fix is pending.
-
 - Local: `http://localhost:8010/mcp/mcp`
 - Production (private Cloud Run): open an authenticated tunnel, then point the MCP client at the tunnel:
   ```bash
