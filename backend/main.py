@@ -18,6 +18,7 @@ from starlette.responses import Response, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 
 from tools.news_tools import register_tools
+from services.usage import start_tracking
 
 
 # ── FastMCP app ──────────────────────────────────────────────────────────────
@@ -67,6 +68,9 @@ async def digest_endpoint(request: Request) -> Response:
             await queue.put(event)
 
         async def run_pipeline():
+            # Costs reported by OpenRouter/Exa during this run stream to the
+            # client as cumulative 'usage' events (services/usage.py).
+            start_tracking(emit)
             try:
                 if mode == 'newsletter':
                     from services.gmail_service import run_gmail_digest

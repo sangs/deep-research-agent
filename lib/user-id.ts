@@ -13,9 +13,20 @@ import { isAllowedEmail, isPreviewDeployment } from './auth-allowlist';
 
 const FIXED_USER_ID = '32087c9e-d37e-4b7c-896e-58da85f4d108';
 
+export interface SessionUser {
+  id: string;
+  email: string;
+}
+
+/** The signed-in allowlisted user, or null. */
+export async function sessionUser(): Promise<SessionUser | null> {
+  if (isPreviewDeployment()) return { id: FIXED_USER_ID, email: 'preview-deployment' }; // Vercel Authentication gates previews
+  const session = await auth();
+  const email = session?.user?.email;
+  return email && isAllowedEmail(email) ? { id: FIXED_USER_ID, email } : null;
+}
+
 /** The signed-in user's id, or null when there is no allowlisted session. */
 export async function sessionUserId(): Promise<string | null> {
-  if (isPreviewDeployment()) return FIXED_USER_ID; // previews: Vercel Authentication gates access
-  const session = await auth();
-  return isAllowedEmail(session?.user?.email) ? FIXED_USER_ID : null;
+  return (await sessionUser())?.id ?? null;
 }

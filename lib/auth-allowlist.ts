@@ -3,13 +3,25 @@
 // every allowlisted user currently shares the same data (single-tenant), see
 // lib/user-id.ts.
 
-export function isAllowedEmail(email: string | null | undefined): boolean {
-  if (!email) return false;
-  const allowed = (process.env.AUTH_ALLOWED_EMAILS ?? '')
+function emailList(value: string | undefined): string[] {
+  return (value ?? '')
     .split(',')
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
-  return allowed.includes(email.trim().toLowerCase());
+}
+
+export function isAllowedEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  return emailList(process.env.AUTH_ALLOWED_EMAILS).includes(email.trim().toLowerCase());
+}
+
+/** Owners see account-level information (provider balances). AUTH_OWNER_EMAILS,
+ *  defaulting to the first allowlisted email. */
+export function isOwnerEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const owners = emailList(process.env.AUTH_OWNER_EMAILS);
+  const effective = owners.length > 0 ? owners : emailList(process.env.AUTH_ALLOWED_EMAILS).slice(0, 1);
+  return effective.includes(email.trim().toLowerCase());
 }
 
 /** Vercel preview deployments are protected by Vercel Authentication (team

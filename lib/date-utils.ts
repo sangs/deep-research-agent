@@ -148,3 +148,41 @@ export function resolveTimeRangeStart(timeRange: string): string {
 export function getBrowserTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
+
+/**
+ * Validate an IANA timezone name, falling back to UTC for unknown/invalid
+ * input (server-side use, where the name comes from the client). Mirrors
+ * backend/tools/date_utils.py resolve_tz().
+ */
+export function resolveTimeZone(tz: string | null | undefined): string {
+  if (!tz) return 'UTC';
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return tz;
+  } catch {
+    return 'UTC';
+  }
+}
+
+/** Calendar day "YYYY-MM-DD" of instant `at` in timezone `tz`. */
+export function dayKeyInTimeZone(tz: string, at: Date = new Date()): string {
+  // en-CA formats as YYYY-MM-DD.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: resolveTimeZone(tz), year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(at);
+}
+
+/** Epoch ms of the next local midnight in timezone `tz` (when a daily budget resets). */
+export function nextMidnightInTimeZone(tz: string, at: Date = new Date()): number {
+  const zone = resolveTimeZone(tz);
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: zone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(at).map((p) => [p.type, p.value]),
+  );
+  // Wall-clock time in `zone` read as if it were UTC, minus the real instant = zone offset.
+  const wallAsUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+  const offsetMs = wallAsUtc - Math.floor(at.getTime() / 1000) * 1000;
+  return Date.UTC(+parts.year, +parts.month - 1, +parts.day + 1) - offsetMs;
+}

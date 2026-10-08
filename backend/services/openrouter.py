@@ -10,10 +10,10 @@ from models.schemas import NewsDigest, TopicCluster, ArticleItem
 from tools.date_utils import resolve_date_range, now_iso
 from services.exa_client import search_news
 from tools.news_tools import load_sources, REGION_KEYWORDS
+from services.llm import chat_completion
 
 load_dotenv()
 
-OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '')
 MODEL = '~google/gemini-flash-latest'
 
 # OpenAI-compatible tool schemas for Exa tools (A, B, C)
@@ -454,21 +454,12 @@ async def run_news_agent(
             # before deciding it can answer from its own knowledge (Bug 1 fix).
             tool_choice = 'required' if round_num <= 2 else 'auto'
 
-            resp = await client.post(
-                'https://openrouter.ai/api/v1/chat/completions',
-                headers={
-                    'Authorization': f'Bearer {OPENROUTER_API_KEY}',
-                    'Content-Type': 'application/json',
-                },
-                json={
-                    'model': MODEL,
-                    'messages': messages,
-                    'tools': tools_for_mode,
-                    'tool_choice': tool_choice,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            data = await chat_completion(client, {
+                'model': MODEL,
+                'messages': messages,
+                'tools': tools_for_mode,
+                'tool_choice': tool_choice,
+            })
             choice = data['choices'][0]
             finish_reason = choice.get('finish_reason', '')
             assistant_msg = choice['message']

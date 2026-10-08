@@ -1,4 +1,7 @@
+import { randomUUID } from 'crypto';
 import { backendAuthHeaders } from '@/lib/backend-auth';
+import { sessionUserId } from '@/lib/user-id';
+import { guardRun, recordUsage, type UsageItem } from '@/lib/usage';
 
 const BACKEND_URL = (process.env.BACKEND_URL ?? 'http://localhost:8010').replace(/\/+$/, '');
 
@@ -21,8 +24,58 @@ function sseError(message: string): Response {
   return new Response(`data: ${JSON.stringify({ type: 'error', message })}\n\n`, { headers: SSE_HEADERS });
 }
 
+interface BackendUsageEvent {
+  type: 'usage';
+  cost_usd: number;
+  items: { provider: string; model: string | null; cost_usd: number }[];
+}
+
+/** Passes the backend SSE stream through unchanged while remembering the latest
+ *  cumulative `usage` event (backend/services/usage.py); `onDone` gets it when
+ *  the stream ends or the client disconnects, so a stopped run still records
+ *  what it spent. */
+function tapUsage(onDone: (usage: BackendUsageEvent | null) => void) {
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let latest: BackendUsageEvent | null = null;
+  let finished = false;
+  const finish = () => {
+    if (!finished) {
+      finished = true;
+      onDone(latest);
+    }
+  };
+  return {
+    stream: new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        controller.enqueue(chunk);
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ') || !line.includes('"usage"')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'usage') latest = event;
+          } catch {
+            // not JSON — ignore
+          }
+        }
+      },
+      flush: finish,
+    }),
+    cancel: finish,
+  };
+}
+
 export async function POST(req: Request): Promise<Response> {
+  const userId = await sessionUserId();
+  if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 });
   const body = await req.json();
+  const tz: string = body.timezone ?? 'UTC';
+  const feature = body.mode === 'newsletter' ? 'newsletter' : 'news';
+  const blocked = await guardRun(userId, tz, feature);
+  if (blocked) return blocked;
 
   let authHeaders: Record<string, string>;
   try {
@@ -36,10 +89,19 @@ export async function POST(req: Request): Promise<Response> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify(body),
+    signal: req.signal,
   });
   if (!upstream.ok || !upstream.body) {
     console.error(`[api/news] backend responded ${upstream.status}`);
     return sseError(`News backend error (HTTP ${upstream.status}).`);
   }
-  return new Response(upstream.body, { headers: SSE_HEADERS });
+
+  const runId = randomUUID();
+  const tap = tapUsage((usage) => {
+    if (!usage) return;
+    const items: UsageItem[] = usage.items.map((i) => ({ provider: i.provider, model: i.model, costUsd: i.cost_usd }));
+    recordUsage(userId, tz, feature, runId, items).catch((e) => console.error('[api/news] recording usage failed:', e));
+  });
+  req.signal.addEventListener('abort', tap.cancel);
+  return new Response(upstream.body.pipeThrough(tap.stream), { headers: SSE_HEADERS });
 }
