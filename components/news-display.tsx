@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { NewsDashboard, type NewsDigest } from '@/components/news-dashboard';
 import { Search, FileText, AlertCircle } from 'lucide-react';
 import { getBrowserTimezone } from '@/lib/date-utils';
+import { blockedRunMessage, notifyUsageChanged } from '@/lib/usage-client';
 
 type NewsStreamEvent =
   | { type: 'searching'; query: string }
@@ -130,6 +131,13 @@ export function useNewsStream() {
         signal: controller.signal,
       });
 
+      // Blocked before the run started (rate limit / budget): JSON, not SSE.
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setErrorMsg(blockedRunMessage(body) ?? body.error ?? `Request failed (HTTP ${res.status})`);
+        setStatus('error');
+        return;
+      }
       if (!res.body) throw new Error('No response body');
 
       const reader = res.body.getReader();
@@ -181,6 +189,8 @@ export function useNewsStream() {
       if (e instanceof Error && e.name === 'AbortError') return; // user stopped — stay as-is
       setErrorMsg(e instanceof Error ? e.message : 'Unknown error');
       setStatus('error');
+    } finally {
+      notifyUsageChanged(); // refresh the usage meter with this run's spend
     }
   }
 

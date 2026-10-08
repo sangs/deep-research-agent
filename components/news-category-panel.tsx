@@ -9,6 +9,8 @@ import { NewsPanel } from '@/components/news-panel';
 import { NewsletterDigestView } from '@/components/newsletter-digest-view';
 import { SavedDigestsDrawer } from '@/components/saved-digests-drawer';
 import { useNewsStream } from '@/components/news-display';
+import { useBudgetGate } from '@/components/budget-gate';
+import { RunCostHint } from '@/components/run-cost-hint';
 import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, LockOpen, Bookmark } from 'lucide-react';
 import { getCachedDigest, saveDigestToCache, clearCachedDigest, buildCacheKey, buildNewsletterCacheKey } from '@/lib/history-client';
 import { toLocalDateKey, resolveTimeRangeStart } from '@/lib/date-utils';
@@ -124,6 +126,8 @@ export function NewsCategoryPanel({
   onManageSources,
 }: NewsCategoryPanelProps) {
   const { events, digest, thread, status, errorMsg, fromCache, run, stop, restore, reset } = useNewsStream();
+  const { ensureBudget } = useBudgetGate();
+  const usageFeature = mode === 'newsletter' ? 'newsletter' : 'news';
 
   const [question, setQuestion] = useState('');
   const [timeRange, setTimeRange] = useState<TimeRange>('week');
@@ -224,6 +228,7 @@ export function NewsCategoryPanel({
         restore(cached);
         return;
       }
+      if (!(await ensureBudget('newsletter'))) return; // cache hits above are free
       run({
         mode: 'newsletter',
         time_range: timeRange,
@@ -247,6 +252,7 @@ export function NewsCategoryPanel({
       restore(cached, question.trim() || undefined);
       return;
     }
+    if (!(await ensureBudget('news'))) return; // cache hits above are free
 
     run({
       question: question.trim() || undefined,
@@ -307,6 +313,7 @@ export function NewsCategoryPanel({
 
   async function handleNlUnlockAndRefresh() {
     if (!nlCacheKey) return;
+    if (!(await ensureBudget('newsletter'))) return; // declined: keep the locked digest
     await clearCachedDigest(nlCacheKey);
     setNlSavedToCache(false);
     reset();
@@ -541,6 +548,7 @@ export function NewsCategoryPanel({
                 )}
               </Button>
             </div>
+            <RunCostHint feature={usageFeature} className="mt-1 text-right" />
           </div>
         </div>
       )}
@@ -661,6 +669,7 @@ export function NewsCategoryPanel({
                 )}
               </Button>
             </div>
+            <RunCostHint feature={usageFeature} className="mt-1 text-right" />
           </div>
         </div>
       )}

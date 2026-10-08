@@ -50,6 +50,7 @@ from dotenv import load_dotenv
 from models.schemas import NewsDigest, TopicCluster, ArticleItem
 from tools.date_utils import resolve_date_range, format_header_date, now_iso
 from tools.news_tools import load_sources
+from services.llm import chat_completion
 
 load_dotenv()
 
@@ -533,19 +534,11 @@ Rules:
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                'https://openrouter.ai/api/v1/chat/completions',
-                headers={
-                    'Authorization': f'Bearer {OPENROUTER_API_KEY}',
-                    'Content-Type': 'application/json',
-                },
-                json={
-                    'model': MODEL,
-                    'messages': [{'role': 'user', 'content': prompt}],
-                },
-            )
-            resp.raise_for_status()
-            content = resp.json()['choices'][0]['message'].get('content', '{}')
+            data = await chat_completion(client, {
+                'model': MODEL,
+                'messages': [{'role': 'user', 'content': prompt}],
+            })
+            content = data['choices'][0]['message'].get('content', '{}')
 
         match = re.search(r'\{[\s\S]*\}', content)
         raw = match.group(0) if match else '{}'
@@ -693,20 +686,12 @@ async def _summarize_via_openrouter(
         )
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.post(
-                    'https://openrouter.ai/api/v1/chat/completions',
-                    headers={
-                        'Authorization': f'Bearer {OPENROUTER_API_KEY}',
-                        'Content-Type': 'application/json',
-                    },
-                    json={
-                        'model': MODEL,
-                        'max_tokens': 450,
-                        'messages': [{'role': 'user', 'content': prompt}],
-                    },
-                )
-                resp.raise_for_status()
-                summary = resp.json()['choices'][0]['message'].get('content', '').strip()
+                data = await chat_completion(client, {
+                    'model': MODEL,
+                    'max_tokens': 450,
+                    'messages': [{'role': 'user', 'content': prompt}],
+                })
+                summary = data['choices'][0]['message'].get('content', '').strip()
                 return idx, summary or e['snippet']
         except Exception:
             return idx, e['snippet'] or ''

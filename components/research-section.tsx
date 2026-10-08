@@ -9,8 +9,28 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { RotateCcw } from 'lucide-react';
 import { saveResearchSession } from '@/lib/history-client';
+import { getBrowserTimezone } from '@/lib/date-utils';
+import { blockedRunMessage, notifyUsageChanged } from '@/lib/usage-client';
+import { useBudgetGate } from '@/components/budget-gate';
+import { RunCostHint } from '@/components/run-cost-hint';
 
-const transport = new DefaultChatTransport({ api: '/api/research' });
+// Timezone header: the server enforces the daily budget on the user's local day.
+const transport = new DefaultChatTransport({
+  api: '/api/research',
+  headers: () => ({ 'X-Timezone': getBrowserTimezone() }),
+});
+
+/** The server answers a blocked run with JSON ({error: 'rate_limited' | 'budget_exceeded'}); show it in words. */
+function friendlyError(error: Error | undefined): Error | undefined {
+  if (!error) return error;
+  try {
+    const message = blockedRunMessage(JSON.parse(error.message));
+    if (message) return new Error(message);
+  } catch {
+    // not JSON — keep the original error
+  }
+  return error;
+}
 
 interface ResearchSectionProps {
   sessionId: string;
@@ -33,6 +53,14 @@ export function ResearchSection({
     messages: initialMessages,
   });
   const isLoading = status === 'submitted' || status === 'streaming';
+  const { ensureBudget } = useBudgetGate();
+
+  // Refresh the usage meter when a run ends (finished, stopped or failed).
+  const wasLoadingRef = useRef(false);
+  useEffect(() => {
+    if (wasLoadingRef.current && !isLoading) notifyUsageChanged();
+    wasLoadingRef.current = isLoading;
+  }, [isLoading]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -59,9 +87,10 @@ export function ResearchSection({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, sessionId]);
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!query.trim() || isLoading) return;
+    if (!(await ensureBudget('deep_research'))) return;
     sendMessage({ text: query });
     setQuery('');
   }
@@ -82,6 +111,7 @@ export function ResearchSection({
           label="Research question"
           focusInput={focusInput}
         />
+        <RunCostHint feature="deep_research" className="mt-1 text-right" />
         {messages.length > 0 && onReset && (
           <div className="flex justify-end mt-2">
             <Button
@@ -97,7 +127,7 @@ export function ResearchSection({
           </div>
         )}
         <ScrollArea className="mt-6">
-          <ResearchDisplay messages={messages} isLoading={isLoading} error={error} />
+          <ResearchDisplay messages={messages} isLoading={isLoading} error={friendlyError(error)} />
           <div ref={bottomRef} />
         </ScrollArea>
       </div>

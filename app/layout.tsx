@@ -4,6 +4,9 @@ import { NavLinks } from "@/components/nav-links";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { LogOut } from "lucide-react";
 import { signOut } from "@/auth";
+import { BudgetGateProvider } from "@/components/budget-gate";
+import { UsageBanner, UsageMeter } from "@/components/usage-meter";
+import { Toaster } from "@/components/ui/sonner";
 import { SectionProvider } from "@/context/section-context";
 import "./globals.css";
 
@@ -47,6 +50,7 @@ export default function RootLayout({
         className={`${dmSerifDisplay.variable} ${plusJakartaSans.variable} ${geistMono.variable} antialiased min-h-screen`}
       >
         <SectionProvider>
+          <BudgetGateProvider>
           <nav className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-md px-5 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div
@@ -59,6 +63,7 @@ export default function RootLayout({
             </div>
             <div className="flex items-center gap-2">
               <span className="hidden sm:inline text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Research Suite</span>
+              <UsageMeter />
               <NavLinks />
               <ThemeToggle />
               <form
@@ -78,7 +83,10 @@ export default function RootLayout({
               </form>
             </div>
           </nav>
+          <UsageBanner />
           {children}
+          <Toaster position="bottom-right" />
+          </BudgetGateProvider>
         </SectionProvider>
       </body>
     </html>

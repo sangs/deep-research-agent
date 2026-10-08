@@ -3,6 +3,7 @@ import os
 import re
 from exa_py import Exa
 from dotenv import load_dotenv
+from services.usage import record_cost
 
 load_dotenv()
 
@@ -137,6 +138,8 @@ async def search_news(
 
     try:
         results = client.search(query, **kwargs)
+        cost = getattr(results, 'cost_dollars', None)
+        await record_cost('exa', 'search', getattr(cost, 'total', None) if cost else None)
         articles = []
         for r in results.results:
             url = r.url or ''
