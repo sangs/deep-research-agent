@@ -12,11 +12,11 @@ import { useNewsStream } from '@/components/news-display';
 import { useBudgetGate } from '@/components/budget-gate';
 import { RunCostHint } from '@/components/run-cost-hint';
 import { GmailActivityButton, OrganizeInboxButton } from '@/components/gmail-organize';
-import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, LockOpen, Bookmark } from 'lucide-react';
-import { getCachedDigest, saveDigestToCache, clearCachedDigest, buildCacheKey, buildNewsletterCacheKey } from '@/lib/history-client';
+import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, Bookmark } from 'lucide-react';
+import { getCachedDigest, saveDigestToCache, buildCacheKey, buildNewsletterCacheKey } from '@/lib/history-client';
 import { toLocalDateKey, resolveTimeRangeStart } from '@/lib/date-utils';
 
-// Newsletter cache rows never expire — Lock/Unlock is the only way to add/remove them.
+// Newsletter cache rows never expire — Lock adds them, Re-run & replace overwrites them, Saved Digests → Unlock removes them.
 // Set to year 2286 (far-future Unix timestamp) so the WHERE expires_at > now() filter always passes.
 const NEWSLETTER_NO_EXPIRY = 9999999999;
 import type { ThreadEntry } from '@/components/news-display';
@@ -141,6 +141,8 @@ export function NewsCategoryPanel({
   const [nlCustomEnd, setNlCustomEnd] = useState('');
   // True after user clicks Lock this session (resets on filter change or new Run)
   const [nlSavedToCache, setNlSavedToCache] = useState(false);
+  // Cache key of the saved digest a Re-run & replace is replacing (null otherwise)
+  const nlReplaceKeyRef = useRef<string | null>(null);
   const [savedDigestsOpen, setSavedDigestsOpen] = useState(false);
   const [expandedPriorRuns, setExpandedPriorRuns] = useState<Set<number>>(new Set());
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -221,6 +223,7 @@ export function NewsCategoryPanel({
     if (mode === 'newsletter') {
       if (nlCustomRangeError) return;
       setNlSavedToCache(false);
+      nlReplaceKeyRef.current = null;
       // Check cache — serves locked (today) or auto-cached (historical) results instantly
       const cached = await getCachedDigest(nlCacheKey!);
       if (cached) {
@@ -269,7 +272,9 @@ export function NewsCategoryPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, digest, fromCache]);
 
-  // Newsletter historical ranges: auto-save after every fresh run (no-expiry — permanent until Re-run fresh).
+  // Newsletter historical ranges: auto-save after every fresh run (no-expiry — permanent until removed in Saved Digests).
+  // Also saves after a successful Re-run & replace, for any range (today
+  // included): that run replaces a digest the user had already locked.
   // Sets nlSavedToCache once the save resolves so nlIsLocked reflects reality —
   // without this the cache-control bar had no way to know a historical range
   // had already been auto-locked, and showed no Lock UI at all for it.
@@ -279,9 +284,10 @@ export function NewsCategoryPanel({
       status === 'done' &&
       digest &&
       !fromCache &&
-      !nlIncludesToday &&
-      nlCacheKey
+      nlCacheKey &&
+      (!nlIncludesToday || nlReplaceKeyRef.current === nlCacheKey)
     ) {
+      nlReplaceKeyRef.current = null;
       saveDigestToCache(nlCacheKey, digest, NEWSLETTER_NO_EXPIRY, {
         mode: 'newsletter',
         locked: true,
@@ -310,10 +316,13 @@ export function NewsCategoryPanel({
     if (cached) restore(cached);
   }
 
-  async function handleNlUnlockAndRefresh() {
+  // Re-run a saved digest. The saved row is NOT deleted first: it stays until
+  // the new run succeeds, then the auto-save effect above replaces it in place
+  // (name and tags kept). A failed or cancelled run leaves it untouched.
+  async function handleNlRerunAndReplace() {
     if (!nlCacheKey) return;
     if (!(await ensureBudget('newsletter'))) return; // declined: keep the locked digest
-    await clearCachedDigest(nlCacheKey);
+    nlReplaceKeyRef.current = nlCacheKey;
     setNlSavedToCache(false);
     reset();
     run({
@@ -556,7 +565,7 @@ export function NewsCategoryPanel({
       {/* Always driven by nlIsLocked, regardless of nlIncludesToday — a historical
           (non-today) Custom/Week/Month range auto-locks itself right after a fresh
           run (see the useEffect above), so it needs the SAME "Digest locked" +
-          "Unlock & re-run" UI as an explicitly-locked "today" digest, not a
+          "Re-run & replace" UI as an explicitly-locked "today" digest, not a
           separate "Re-run fresh only" branch with no Lock feedback at all. Before
           the auto-save effect resolves, this briefly shows "Lock digest" — clicking
           it just performs the same save the effect is already making, a harmless
@@ -569,10 +578,11 @@ export function NewsCategoryPanel({
                 <Lock className="h-3 w-3" /> Digest locked{timeRange === 'today' ? ' for today' : ''}
               </span>
               <button
-                onClick={handleNlUnlockAndRefresh}
-                className="text-xs text-muted-foreground hover:text-destructive flex items-center gap-1 transition-colors ml-auto"
+                onClick={handleNlRerunAndReplace}
+                title="Runs this digest again. The saved one is kept until the new run finishes, then replaced (name and tags kept)."
+                className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors ml-auto"
               >
-                <LockOpen className="h-3 w-3" /> Unlock &amp; re-run
+                <RotateCcw className="h-3 w-3" /> Re-run &amp; replace
               </button>
             </>
           ) : (
