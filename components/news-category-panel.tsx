@@ -148,8 +148,6 @@ export function NewsCategoryPanel({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const searchEvents = events.filter((e) => e.type === 'searching') as { type: 'searching'; query: string }[];
-  const resultsEvent = events.find((e) => e.type === 'results') as { type: 'results'; count: number; total?: number } | undefined;
-  const nlTruncated = !!resultsEvent && typeof resultsEvent.total === 'number' && resultsEvent.total > resultsEvent.count;
   const modeType = mode === 'curated' || mode === 'research' || mode === 'newsletter' ? 'curated' : mode === 'region' ? 'region' : 'general';
   const latestArticleCount = digest ? articleCount(digest) : 0;
 
@@ -755,8 +753,7 @@ export function NewsCategoryPanel({
                 ) : mode === 'newsletter' ? (
                   <NewsletterDigestView
                     topics={latestRun.digest.topics}
-                    truncated={nlTruncated}
-                    totalCount={resultsEvent?.total}
+                    notices={latestRun.digest.notices}
                   />
                 ) : (
                   <NewsPanel topics={latestRun.digest.topics} mode={modeType} />

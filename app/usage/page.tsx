@@ -194,7 +194,10 @@ function RaiseHistory({ s }: { s: UsageSummary }) {
 
 interface ProviderInfo {
   fetchedAt: number;
-  openrouter: { usageUsd?: number; usageTodayUsd?: number; limitUsd?: number | null; limitRemainingUsd?: number | null; error?: string };
+  openrouter: {
+    usageUsd?: number; usageTodayUsd?: number; limitUsd?: number | null; limitRemainingUsd?: number | null;
+    creditsPurchasedUsd?: number | null; creditsUsedUsd?: number | null; creditsRemainingUsd?: number | null; error?: string;
+  };
   links: { name: string; url: string }[];
 }
 
@@ -214,12 +217,24 @@ function ProviderAccounts() {
       {or.error ? (
         <p className="text-sm text-muted-foreground">{or.error}</p>
       ) : (
+        <>
+        {or.creditsRemainingUsd != null && or.creditsRemainingUsd < 2 && (
+          <p role="alert" className="mb-3 flex items-start gap-2 rounded-md border border-[#d03b3b]/40 bg-[#d03b3b]/10 px-3 py-2 text-sm">
+            <span aria-hidden>⛔</span>
+            <span>
+              <span className="font-medium">OpenRouter balance is {or.creditsRemainingUsd <= 0 ? 'exhausted' : 'low'} ({formatUsd(Math.max(0, or.creditsRemainingUsd))} left).</span>{' '}
+              AI calls fail when it reaches $0. Add credits at openrouter.ai/settings/credits.
+            </span>
+          </p>
+        )}
         <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+          <div><dt className="text-muted-foreground">OpenRouter balance</dt><dd className="font-medium tabular-nums">{or.creditsRemainingUsd == null ? '—' : formatUsd(Math.max(0, or.creditsRemainingUsd))}</dd></div>
           <div><dt className="text-muted-foreground">OpenRouter spend today</dt><dd className="font-medium tabular-nums">{formatUsd(or.usageTodayUsd ?? 0)}</dd></div>
           <div><dt className="text-muted-foreground">OpenRouter spend (all time)</dt><dd className="font-medium tabular-nums">{formatUsd(or.usageUsd ?? 0)}</dd></div>
           <div><dt className="text-muted-foreground">Key credit limit</dt><dd className="font-medium">{or.limitUsd == null ? 'None set ⚠' : formatUsd(or.limitUsd)}</dd></div>
-          <div><dt className="text-muted-foreground">Remaining</dt><dd className="font-medium tabular-nums">{or.limitRemainingUsd == null ? '—' : formatUsd(or.limitRemainingUsd)}</dd></div>
+          <div><dt className="text-muted-foreground">Key limit remaining</dt><dd className="font-medium tabular-nums">{or.limitRemainingUsd == null ? '—' : formatUsd(or.limitRemainingUsd)}</dd></div>
         </dl>
+        </>
       )}
       {or.limitUsd == null && !or.error && (
         <p className="mt-3 text-sm">

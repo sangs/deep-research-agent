@@ -9,6 +9,8 @@ export interface NewsDigest {
   region: string | null;
   generated_at: string;
   topics: TopicCluster[];
+  /** User-visible warnings from the backend (e.g. topic grouping fell back to by-source, per-run limit hit). */
+  notices?: string[];
 }
 
 interface NewsDashboardProps {

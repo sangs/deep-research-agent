@@ -13,12 +13,18 @@ export async function GET() {
 
   let openrouter: Record<string, unknown> | { error: string };
   try {
-    const res = await fetch('https://openrouter.ai/api/v1/key', {
-      headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` },
-      cache: 'no-store',
-    });
-    const { data } = await res.json();
+    const headers = { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` };
+    const [keyRes, creditsRes] = await Promise.all([
+      fetch('https://openrouter.ai/api/v1/key', { headers, cache: 'no-store' }),
+      fetch('https://openrouter.ai/api/v1/credits', { headers, cache: 'no-store' }),
+    ]);
+    const { data } = await keyRes.json();
+    const credits = creditsRes.ok ? (await creditsRes.json()).data : null;
     openrouter = {
+      // Account prepaid balance: when it reaches $0 every AI call fails (HTTP 402).
+      creditsPurchasedUsd: credits?.total_credits ?? null,
+      creditsUsedUsd: credits?.total_usage ?? null,
+      creditsRemainingUsd: credits ? credits.total_credits - credits.total_usage : null,
       label: data.label,
       usageUsd: data.usage,
       usageTodayUsd: data.usage_daily,

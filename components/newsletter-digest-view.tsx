@@ -16,17 +16,16 @@ interface OpenArticle {
 
 interface NewsletterDigestViewProps {
   topics: TopicCluster[];
-  /** True when the backend fetch hit its email cap and more matched than were fetched. */
-  truncated?: boolean;
-  /** Total emails matched by Gmail, when known (may exceed the number rendered). */
-  totalCount?: number;
+  /** Backend warnings for this digest: per-run email limit reached, topic grouping
+   *  fell back to by-source, summaries unavailable. Never silently degraded. */
+  notices?: string[];
 }
 
 // Articles shown per topic group before a "Show more" expander appears —
 // bounds initial DOM size regardless of how large the digest is.
 const VISIBLE_STEP = 10;
 
-export function NewsletterDigestView({ topics, truncated, totalCount }: NewsletterDigestViewProps) {
+export function NewsletterDigestView({ topics, notices = [] }: NewsletterDigestViewProps) {
   const [openArticle, setOpenArticle] = useState<OpenArticle | null>(null);
   const [visibleCounts, setVisibleCounts] = useState<Record<number, number>>({});
 
@@ -53,14 +52,15 @@ export function NewsletterDigestView({ topics, truncated, totalCount }: Newslett
 
   return (
     <div className="space-y-8">
-      {/* Truncation notice — Gmail matched more emails than were fetched */}
-      {truncated && (
-        <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-          <span>
-            Showing {totalArticles} of {totalCount} matching emails. Narrow the date range or sender
-            filter to see the rest.
-          </span>
+      {/* Backend notices (limit reached, by-source fallback, missing summaries) */}
+      {notices.length > 0 && (
+        <div role="status" className="space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          {notices.map((n) => (
+            <p key={n} className="flex items-start gap-2">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>{n}</span>
+            </p>
+          ))}
         </div>
       )}
 
