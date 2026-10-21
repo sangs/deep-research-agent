@@ -50,7 +50,7 @@ from dotenv import load_dotenv
 from models.schemas import NewsDigest, TopicCluster, ArticleItem
 from tools.date_utils import resolve_date_range, format_header_date, now_iso
 from tools.news_tools import load_sources
-from services.llm import chat_completion
+from services.llm import chat_completion, describe_llm_error
 
 load_dotenv()
 
@@ -430,38 +430,70 @@ def build_query(start_iso: str, end_iso: str, senders: list[str], subject_kw: st
     return ' '.join(parts)
 
 
-def fetch_emails(service, query: str, max_results: int = MAX_EMAILS_FETCH) -> tuple[list[dict], int]:
+GMAIL_BATCH_SIZE = 50  # messages.get calls per Gmail batch request (Google recommends <= 50)
+
+
+def _get_messages_batched(service, ids: list[str]) -> dict[str, dict]:
+    """Fetch full messages using Gmail batch HTTP requests (one round trip per
+    GMAIL_BATCH_SIZE messages instead of one per message). Messages that fail
+    inside a batch (e.g. per-user rate limit) are retried one by one."""
+    fetched: dict[str, dict] = {}
+    failed: list[str] = []
+
+    def on_response(request_id, response, exception):
+        if exception is None:
+            fetched[request_id] = response
+        else:
+            failed.append(request_id)
+
+    for i in range(0, len(ids), GMAIL_BATCH_SIZE):
+        batch = service.new_batch_http_request(callback=on_response)
+        for mid in ids[i:i + GMAIL_BATCH_SIZE]:
+            batch.add(service.users().messages().get(userId='me', id=mid, format='full'), request_id=mid)
+        batch.execute()
+    for mid in failed:
+        try:
+            fetched[mid] = service.users().messages().get(userId='me', id=mid, format='full').execute()
+        except Exception:
+            pass  # skipped; the email simply isn't in this digest
+    return fetched
+
+
+def fetch_emails(service, query: str, max_results: int = MAX_EMAILS_FETCH) -> tuple[list[dict], bool]:
     """Fetch full email objects matching query (sync — call via asyncio.to_thread).
 
-    Returns (emails, total_estimate) — total_estimate is Gmail's own count of
-    all matching messages (from resultSizeEstimate on the first page), which
-    may exceed max_results. Callers use this to tell the user when results
-    were truncated instead of silently dropping the rest.
+    Returns (emails, truncated). `truncated` is True only when more matching
+    messages existed beyond max_results (Gmail returned another page). Gmail's
+    resultSizeEstimate is NOT used: it is capped at 201 for multi-page results
+    and is wrong in both directions (measured 2026-10-20: 201 shown vs 143 and
+    vs 436 actual), which produced false "118 of 201" warnings.
     """
-    messages, page_token, total_estimate = [], None, None
+    messages, page_token, truncated = [], None, False
     while True:
         kwargs = {'userId': 'me', 'q': query, 'maxResults': min(max_results, 100)}
         if page_token:
             kwargs['pageToken'] = page_token
         resp = service.users().messages().list(**kwargs).execute()
-        if total_estimate is None:
-            total_estimate = resp.get('resultSizeEstimate', 0)
-        batch = resp.get('messages', [])
-        messages.extend(batch)
+        messages.extend(resp.get('messages', []))
         page_token = resp.get('nextPageToken')
-        if not page_token or len(messages) >= max_results:
+        if len(messages) >= max_results:
+            truncated = bool(page_token) or len(messages) > max_results
+            break
+        if not page_token:
             break
 
+    ids = [m['id'] for m in messages[:max_results]]
+    full_by_id = _get_messages_batched(service, ids)
     emails = []
-    for msg in messages[:max_results]:
-        full = service.users().messages().get(
-            userId='me', id=msg['id'], format='full'
-        ).execute()
+    for mid in ids:  # keep Gmail's order (newest first)
+        full = full_by_id.get(mid)
+        if full is None:
+            continue
         headers = {h['name'].lower(): h['value'] for h in full['payload'].get('headers', [])}
         body    = decode_body(full['payload'])
         links   = extract_urls(body) + extract_urls(full.get('snippet', '')) + extract_hrefs(full['payload'])
         emails.append({
-            'id':      msg['id'],
+            'id':      mid,
             'subject': headers.get('subject', '(no subject)'),
             'from':    headers.get('from', ''),
             'date':    headers.get('date', ''),
@@ -469,8 +501,7 @@ def fetch_emails(service, query: str, max_results: int = MAX_EMAILS_FETCH) -> tu
             'snippet': _clean_snippet(full.get('snippet', '')),
             'links':   links,
         })
-
-    return emails, max(total_estimate or 0, len(emails))
+    return emails, truncated
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -493,12 +524,14 @@ def _group_by_source(emails: list[dict]) -> tuple[list[list[int]], list[str]]:
 
 async def _cluster_via_llm(
     emails: list[dict],
+    notices: list[str],
 ) -> tuple[list[list[int]], list[str]]:
     """Cluster emails into topic groups using the LLM via OpenRouter.
 
     Returns (clusters, cluster_names) where clusters[i] is a list of email
     indices belonging to topic i, sorted by cluster size descending.
-    Falls back to by-source grouping if the LLM call fails.
+    If the LLM call fails, falls back to by-source grouping AND appends a
+    user-visible notice (never silently — see daily log §20).
     """
     if not emails:
         return [], []
@@ -569,14 +602,17 @@ Rules:
             return list(clusters), list(names)
         return [], []
 
-    except Exception:
-        # Fallback: group by source
+    except Exception as e:
+        reason = describe_llm_error(e)
+        print(f'[newsletter] topic clustering failed ({reason}); falling back to by-source for {len(emails)} emails')
+        notices.append(f'Topic grouping failed ({reason}), so these emails are grouped by source instead.')
         return _group_by_source(emails)
 
 
 async def _cluster_via_llm_batched(
     emails: list[dict],
     emit_event: Callable[[dict], Awaitable[None]] | None = None,
+    notices: list[str] | None = None,
 ) -> tuple[list[list[int]], list[str]]:
     """Cluster emails into topic groups, splitting into CLUSTER_BATCH_SIZE-sized
     batches for large email counts instead of sending one giant prompt.
@@ -596,8 +632,9 @@ async def _cluster_via_llm_batched(
     fuzzy/embedding-based merge pass is a possible future enhancement, not
     built here.
     """
+    notices = notices if notices is not None else []
     if len(emails) <= CLUSTER_BATCH_SIZE:
-        return await _cluster_via_llm(emails)
+        return await _cluster_via_llm(emails, notices)
 
     batches = [emails[i:i + CLUSTER_BATCH_SIZE] for i in range(0, len(emails), CLUSTER_BATCH_SIZE)]
     total_batches = len(batches)
@@ -612,7 +649,7 @@ async def _cluster_via_llm_batched(
         if emit_event:
             await emit_event({'type': 'searching', 'query': f'Clustering batch {batch_num}/{total_batches} ({len(batch)} emails)…'})
 
-        batch_clusters, batch_names = await _cluster_via_llm(batch)
+        batch_clusters, batch_names = await _cluster_via_llm(batch, notices)
 
         for ids, name in zip(batch_clusters, batch_names):
             global_ids = [offset + i for i in ids]
@@ -641,12 +678,13 @@ async def _cluster_via_llm_batched(
 async def _summarize_via_openrouter(
     emails: list[dict],
     emit_event: Callable[[dict], Awaitable[None]] | None = None,
+    notices: list[str] | None = None,
 ) -> dict[int, str]:
     """Generate a 2-4 sentence summary for each email via OpenRouter.
 
     Returns {email_index: summary_text}.  Falls back to the raw Gmail snippet
     on any error or if the body is very short (< 200 chars).
-    Processes up to 5 emails concurrently to stay within rate limits.
+    Processes up to 10 emails concurrently.
     Emits a progress event after each batch when there's more than one batch,
     so large digests (month range, many senders) show live progress instead
     of one static "Summarizing…" message for minutes.
@@ -693,12 +731,14 @@ async def _summarize_via_openrouter(
                 })
                 summary = data['choices'][0]['message'].get('content', '').strip()
                 return idx, summary or e['snippet']
-        except Exception:
+        except Exception as exc:
+            failures.append(describe_llm_error(exc))
             return idx, e['snippet'] or ''
 
     # Process in batches of 5 concurrent requests
+    failures: list[str] = []
     results: dict[int, str] = {}
-    batch_size = 5
+    batch_size = 10  # Phase 0 (2026-10-20): was 5
     for i in range(0, len(emails), batch_size):
         batch = [(i + j, emails[i + j]) for j in range(min(batch_size, len(emails) - i))]
         batch_results = await asyncio.gather(*[_summarize_one(idx, e) for idx, e in batch])
@@ -706,6 +746,11 @@ async def _summarize_via_openrouter(
         if emit_event and len(emails) > batch_size:
             await emit_event({'type': 'searching', 'query': f'Summarized {len(results)}/{len(emails)} emails…'})
 
+    if failures and notices is not None:
+        notices.append(
+            f'Summaries are unavailable for {len(failures)} of {len(emails)} emails ({failures[0]}); '
+            "Gmail's preview text is shown instead."
+        )
     return results
 
 
@@ -720,6 +765,7 @@ def _build_newsletter_digest(
     summaries: dict[int, str],
     time_range: str,
     tz_name: str = 'UTC',
+    notices: list[str] | None = None,
 ) -> NewsDigest:
     """Convert clustered + summarized emails into a NewsDigest."""
     topics: list[TopicCluster] = []
@@ -767,6 +813,7 @@ def _build_newsletter_digest(
         region       = None,
         generated_at = now_iso(),
         topics       = topics,
+        notices      = list(dict.fromkeys(notices or [])),  # de-duplicated, order kept
     )
 
 
@@ -846,16 +893,16 @@ async def run_gmail_digest(
     if emit_event:
         await emit_event({'type': 'searching', 'query': f'Gmail {date_label}'})
 
-    emails, total_estimate = await asyncio.to_thread(fetch_emails, service, query)
+    emails, truncated = await asyncio.to_thread(fetch_emails, service, query)
 
     if emit_event:
+        n = len(emails)
         await emit_event({
-            'type':  'results',
-            'count': len(emails),
-            'total': total_estimate,
-            'query': f'Gmail ({len(emails)} of {total_estimate} email{"s" if total_estimate != 1 else ""})'
-                     if total_estimate > len(emails)
-                     else f'Gmail ({len(emails)} email{"s" if len(emails) != 1 else ""})',
+            'type':      'results',
+            'count':     n,
+            'truncated': truncated,
+            'query':     f'Gmail (first {n} emails — more matched)' if truncated
+                         else f'Gmail ({n} email{"s" if n != 1 else ""})',
         })
 
     if not emails:
@@ -878,16 +925,19 @@ async def run_gmail_digest(
         mode_label = 'by source' if by_source else 'by topic'
         await emit_event({'type': 'searching', 'query': f'Clustering {len(emails)} emails {mode_label}…'})
 
+    notices: list[str] = []
+    if truncated:
+        notices.append(f'Only the first {len(emails)} matching emails are included (the per-run limit). Narrow the date range or sender filter to see the rest.')
     if by_source:
         clusters, cluster_names = _group_by_source(emails)
     else:
-        clusters, cluster_names = await _cluster_via_llm_batched(emails, emit_event)
+        clusters, cluster_names = await _cluster_via_llm_batched(emails, emit_event, notices)
 
     # ── Step 5: Summarize ────────────────────────────────────────────────────
     if emit_event:
         await emit_event({'type': 'searching', 'query': f'Summarizing {len(emails)} emails…'})
 
-    summaries = await _summarize_via_openrouter(emails, emit_event)
+    summaries = await _summarize_via_openrouter(emails, emit_event, notices)
 
     # ── Step 6: Assemble digest ──────────────────────────────────────────────
-    return _build_newsletter_digest(emails, clusters, cluster_names, summaries, time_range, tz_name)
+    return _build_newsletter_digest(emails, clusters, cluster_names, summaries, time_range, tz_name, notices)

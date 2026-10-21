@@ -65,6 +65,9 @@ export async function POST(req: Request): Promise<Response> {
     messages: await convertToModelMessages(messages),
     tools: { webSearch: createWebSearchTool((cost) => { exaCost += cost; }) },
     stopWhen: stepCountIs(10),
+    // Explicit cap: without it OpenRouter pre-authorizes the model's full output
+    // window (65k tokens) per step, which fails on a low credit balance.
+    maxOutputTokens: 8192,
     abortSignal: req.signal,
     onStepFinish: (step) => {
       llmCost += stepCost(step);
