@@ -51,6 +51,7 @@ from models.schemas import NewsDigest, TopicCluster, ArticleItem
 from tools.date_utils import resolve_date_range, format_header_date, now_iso
 from tools.news_tools import load_sources
 from services.llm import chat_completion, describe_llm_error
+from services.gmail_organizer import ensure_label, add_label
 
 load_dotenv()
 
@@ -369,35 +370,8 @@ def sender_display(from_header: str) -> str:
 # LABEL MANAGEMENT
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _list_all_labels(service) -> dict[str, str]:
-    result = service.users().labels().list(userId='me').execute()
-    return {lbl['name'].lower(): lbl['id'] for lbl in result.get('labels', [])}
-
-
-def ensure_label(service, name: str) -> str:
-    """Return the label ID for `name`, creating it if it doesn't exist."""
-    labels = _list_all_labels(service)
-    if name.lower() in labels:
-        return labels[name.lower()]
-    body = {
-        'name': name,
-        'labelListVisibility': 'labelShow',
-        'messageListVisibility': 'show',
-    }
-    new_label = service.users().labels().create(userId='me', body=body).execute()
-    return new_label['id']
-
-
-def apply_label_to_messages(service, message_ids: list[str], label_id: str) -> None:
-    """Batch-apply label_id to message_ids. Idempotent — reruns are safe."""
-    if not message_ids:
-        return
-    for i in range(0, len(message_ids), 1000):
-        batch = message_ids[i:i + 1000]
-        service.users().messages().batchModify(
-            userId='me',
-            body={'ids': batch, 'addLabelIds': [label_id]},
-        ).execute()
+# Label writes live in services/gmail_organizer.py (the only module allowed to
+# change Gmail; guarded and tested).
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -793,6 +767,7 @@ def _build_newsletter_digest(
                     break
 
             articles.append(ArticleItem(
+                message_id     = e['id'],
                 title          = e['subject'],
                 url            = url,
                 source         = sender_display(e['from']),
@@ -911,7 +886,7 @@ async def run_gmail_digest(
     # ── Step 3: Tag matched emails with [gmail-ai-digested] ─────────────────
     try:
         label_id = await asyncio.to_thread(ensure_label, service, DIGESTED_LABEL)
-        await asyncio.to_thread(apply_label_to_messages, service, [e['id'] for e in emails], label_id)
+        await asyncio.to_thread(add_label, service, [e['id'] for e in emails], label_id)
     except Exception:
         pass  # tagging failure is non-fatal
 

@@ -29,6 +29,13 @@
       "when": 1791477664848,
       "tag": "0003_usage_limits",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791490981188,
+      "tag": "0004_gmail_actions",
+      "breakpoints": true
     }
   ]
 }

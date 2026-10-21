@@ -11,6 +11,9 @@
 
 import { wifProviderAudience, vercelOidcToken, federatedAccessToken, generateIdToken, jwtExpiryMs } from './gcp-wif';
 
+/** Base URL of the Cloud Run backend (localhost:8010 in local dev). */
+export const BACKEND_URL = (process.env.BACKEND_URL ?? 'http://localhost:8010').replace(/\/+$/, '');
+
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 // ID tokens live 1 hour; reuse across invocations of a warm function instance.

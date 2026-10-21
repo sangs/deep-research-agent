@@ -11,6 +11,7 @@ import { SavedDigestsDrawer } from '@/components/saved-digests-drawer';
 import { useNewsStream } from '@/components/news-display';
 import { useBudgetGate } from '@/components/budget-gate';
 import { RunCostHint } from '@/components/run-cost-hint';
+import { GmailActivityButton, OrganizeInboxButton } from '@/components/gmail-organize';
 import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, LockOpen, Bookmark } from 'lucide-react';
 import { getCachedDigest, saveDigestToCache, clearCachedDigest, buildCacheKey, buildNewsletterCacheKey } from '@/lib/history-client';
 import { toLocalDateKey, resolveTimeRangeStart } from '@/lib/date-utils';
@@ -582,6 +583,11 @@ export function NewsCategoryPanel({
               <Lock className="h-3 w-3" /> Lock digest{timeRange === 'today' ? ' for today' : ''}
             </button>
           )}
+          {/* Digest-wide Gmail organizing (owner only; hidden otherwise) */}
+          <div className="flex items-center gap-1">
+            <OrganizeInboxButton topics={latestRun.digest.topics} />
+            <GmailActivityButton />
+          </div>
         </div>
       )}
 

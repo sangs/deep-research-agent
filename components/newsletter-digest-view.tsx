@@ -3,7 +3,8 @@
 import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { ExternalLink, ChevronDown, AlertTriangle } from 'lucide-react';
+import { ExternalLink, ChevronDown, AlertTriangle, FolderInput } from 'lucide-react';
+import { FolderDialog, ORGANIZE_PREFIX, SelectionBar, topicFolderName, useGmailOrganize } from '@/components/gmail-organize';
 import { renderExcerpt } from '@/components/news-card';
 import { formatBareDate } from '@/lib/date-utils';
 import { labelLinks } from '@/lib/link-utils';
@@ -28,6 +29,9 @@ const VISIBLE_STEP = 10;
 export function NewsletterDigestView({ topics, notices = [] }: NewsletterDigestViewProps) {
   const [openArticle, setOpenArticle] = useState<OpenArticle | null>(null);
   const [visibleCounts, setVisibleCounts] = useState<Record<number, number>>({});
+  const org = useGmailOrganize();
+  const canOrganize = !!org?.available;
+  const [moveTopic, setMoveTopic] = useState<{ label: string; ids: string[] } | null>(null);
 
   // Build flat index: each article gets a sequential number across all groups
   let counter = 0;
@@ -107,6 +111,19 @@ export function NewsletterDigestView({ topics, notices = [] }: NewsletterDigestV
                 {cluster.label}
               </span>
               <div className="h-px flex-1 bg-border/60" />
+              {canOrganize && (() => {
+                const ids = cluster.articles.map((a) => a.message_id).filter((id): id is string => !!id);
+                return ids.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setMoveTopic({ label: cluster.label, ids })}
+                    className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                    title={`Move all ${ids.length} emails in this topic to a folder`}
+                  >
+                    <FolderInput className="h-3 w-3" /> Move all {ids.length}…
+                  </button>
+                ) : null;
+              })()}
             </div>
 
             {/* Article rows — paginated so a huge digest doesn't dump its entire
@@ -119,6 +136,17 @@ export function NewsletterDigestView({ topics, notices = [] }: NewsletterDigestV
                   className="flex items-start gap-3 py-2 px-2 rounded-lg hover:bg-muted/40 cursor-pointer transition-colors group"
                   onClick={() => setOpenArticle({ article })}
                 >
+                  {/* Select for bulk actions (owner only, when the email id is known) */}
+                  {canOrganize && article.message_id && (
+                    <input
+                      type="checkbox"
+                      className="mt-1 shrink-0"
+                      aria-label={`Select "${article.title}"`}
+                      checked={org!.selected.has(article.message_id)}
+                      onChange={() => org!.toggle(article.message_id!)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  )}
                   {/* Number */}
                   <span className="text-[11px] font-bold text-primary/70 tabular-nums w-5 shrink-0 mt-0.5">
                     {String(num).padStart(2, '0')}
@@ -171,6 +199,17 @@ export function NewsletterDigestView({ topics, notices = [] }: NewsletterDigestV
           </div>
         ))}
       </div>
+
+      <SelectionBar />
+      {moveTopic && (
+        <FolderDialog
+          open
+          mode="move"
+          messageIds={moveTopic.ids}
+          defaultName={topicFolderName(ORGANIZE_PREFIX, moveTopic.label)}
+          onClose={() => setMoveTopic(null)}
+        />
+      )}
 
       {/* Sheet drawer */}
       <Sheet open={openArticle !== null} onOpenChange={(open) => !open && setOpenArticle(null)}>
