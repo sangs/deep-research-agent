@@ -95,3 +95,21 @@ export const gmailActions = pgTable('gmail_actions', {
   undoneAt: bigint('undone_at', { mode: 'number' }),
   undoneBy: text('undone_by'),
 }, (table) => [index('gmail_actions_created_idx').on(table.createdAt)]);
+
+// ── Newsletter per-email store (backend/services/newsletter_store.py) ──────
+// Scale-out Phase 1 (architecture/features/13-newsletter-scale-out-plan-2026-10-20.md):
+// each email is summarized once and reused by every later digest run that
+// includes it. Rows are keyed by Gmail message id; which emails belong to a
+// run still comes from Gmail, so deleted/moved emails drop out on their own.
+// Topic grouping is not stored (it depends on the set of emails in a run).
+export const newsletterEmails = pgTable('newsletter_emails', {
+  messageId: text('message_id').primaryKey(),
+  sender: text('sender').notNull(), // raw From header
+  subject: text('subject').notNull(),
+  dateHeader: text('date_header').notNull(), // raw Date header, formatted per reader timezone at read time
+  snippet: text('snippet').notNull(),
+  links: text('links').array().notNull(),
+  summary: text('summary').notNull(),
+  summaryVersion: integer('summary_version').notNull(), // SUMMARY_VERSION in gmail_service.py; older rows are re-summarized
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(), // epoch ms; retention purge uses this
+}, (table) => [index('newsletter_emails_created_idx').on(table.createdAt)]);

@@ -8,6 +8,13 @@ the model's full output window (65,536 tokens for Gemini Flash), so a low
 credit balance rejects the call outright (HTTP 402) even when the real
 response would be small. That is what silently broke "By topic" grouping on
 2026-10-20 (daily log §20).
+
+Every call also asks for low reasoning effort. Gemini Flash "thinks" before
+answering and the thinking counts against max_tokens: with the default it
+spent all 4,096 tokens thinking on topic grouping (finish_reason=length, JSON
+cut off), so "By topic" fell back to by-source again. Low effort: ~3 s and a
+complete answer (measured 2026-10-21, daily log 2026-10-21 §11). Callers can
+override `reasoning` in their payload.
 """
 
 import os
@@ -18,6 +25,7 @@ from services.usage import record_cost
 
 OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 DEFAULT_MAX_TOKENS = 4096
+DEFAULT_REASONING = {'effort': 'low'}
 
 
 class ProviderCreditError(RuntimeError):
@@ -32,6 +40,8 @@ def describe_llm_error(exc: Exception) -> str:
         return 'the AI model took too long to respond'
     if isinstance(exc, httpx.HTTPStatusError):
         return f'the AI provider returned HTTP {exc.response.status_code}'
+    if isinstance(exc, ValueError):  # includes json.JSONDecodeError
+        return "the AI reply couldn't be used"
     return f'{type(exc).__name__}'
 
 
@@ -42,7 +52,7 @@ async def chat_completion(client: httpx.AsyncClient, payload: dict) -> dict:
             'Authorization': f"Bearer {os.getenv('OPENROUTER_API_KEY', '')}",
             'Content-Type': 'application/json',
         },
-        json={'max_tokens': DEFAULT_MAX_TOKENS, **payload, 'usage': {'include': True}},
+        json={'max_tokens': DEFAULT_MAX_TOKENS, 'reasoning': DEFAULT_REASONING, **payload, 'usage': {'include': True}},
     )
     if resp.status_code == 402:
         raise ProviderCreditError('OpenRouter credit balance is exhausted — add credits at openrouter.ai/settings/credits')

@@ -36,6 +36,13 @@
       "when": 1791490981188,
       "tag": "0004_gmail_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792602500749,
+      "tag": "0005_newsletter_emails",
+      "breakpoints": true
     }
   ]
 }
