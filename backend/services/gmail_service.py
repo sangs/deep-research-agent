@@ -52,11 +52,16 @@ from tools.date_utils import resolve_date_range, format_header_date, now_iso
 from tools.news_tools import load_sources
 from services.llm import chat_completion, describe_llm_error
 from services.gmail_organizer import ensure_label, add_label
+from services import newsletter_store
 
 load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '')
 MODEL = '~google/gemini-flash-latest'
+# Version of the stored per-email summaries (services/newsletter_store.py).
+# Bump when the summary prompt or model changes: older rows are then
+# re-summarized as runs touch them.
+SUMMARY_VERSION = 1
 
 # Gmail label constants
 DIGESTED_LABEL = 'gmail-ai-digested'   # applied to every matched email
@@ -433,10 +438,10 @@ def _get_messages_batched(service, ids: list[str]) -> dict[str, dict]:
     return fetched
 
 
-def fetch_emails(service, query: str, max_results: int = MAX_EMAILS_FETCH) -> tuple[list[dict], bool]:
-    """Fetch full email objects matching query (sync — call via asyncio.to_thread).
+def list_message_ids(service, query: str, max_results: int = MAX_EMAILS_FETCH) -> tuple[list[str], bool]:
+    """IDs of the messages matching query, newest first (sync — call via asyncio.to_thread).
 
-    Returns (emails, truncated). `truncated` is True only when more matching
+    Returns (ids, truncated). `truncated` is True only when more matching
     messages existed beyond max_results (Gmail returned another page). Gmail's
     resultSizeEstimate is NOT used: it is capped at 201 for multi-page results
     and is wrong in both directions (measured 2026-10-20: 201 shown vs 143 and
@@ -455,8 +460,12 @@ def fetch_emails(service, query: str, max_results: int = MAX_EMAILS_FETCH) -> tu
             break
         if not page_token:
             break
+    return [m['id'] for m in messages[:max_results]], truncated
 
-    ids = [m['id'] for m in messages[:max_results]]
+
+def fetch_emails_by_id(service, ids: list[str]) -> list[dict]:
+    """Fetch and parse full emails for `ids`, keeping their order (sync — call
+    via asyncio.to_thread). Emails that can't be fetched are skipped."""
     full_by_id = _get_messages_batched(service, ids)
     emails = []
     for mid in ids:  # keep Gmail's order (newest first)
@@ -475,7 +484,7 @@ def fetch_emails(service, query: str, max_results: int = MAX_EMAILS_FETCH) -> tu
             'snippet': _clean_snippet(full.get('snippet', '')),
             'links':   links,
         })
-    return emails, truncated
+    return emails
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -496,6 +505,13 @@ def _group_by_source(emails: list[dict]) -> tuple[list[list[int]], list[str]]:
 # LLM CLUSTERING (replaces sentence-transformers + spaCy + scikit-learn)
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _summary_headline(summary: str | None) -> str:
+    """The bold first line of a stored summary, without the ** markers."""
+    if not summary:
+        return ''
+    return summary.strip().split('\n', 1)[0].strip().strip('*').strip()
+
+
 async def _cluster_via_llm(
     emails: list[dict],
     notices: list[str],
@@ -510,11 +526,13 @@ async def _cluster_via_llm(
     if not emails:
         return [], []
 
-    # Build a compact list of emails for the prompt
+    # Build a compact list of emails for the prompt. The summary's headline
+    # (Phase 1: summaries exist before grouping) says more than Gmail's preview.
     lines = []
     for i, e in enumerate(emails):
-        snippet = (e['snippet'] or e['body'][:100]).replace('\n', ' ')[:120]
-        lines.append(f'[{i}] From: {sender_display(e["from"])} | Subject: {e["subject"]} | Preview: {snippet}')
+        gist = _summary_headline(e.get('summary')) or e['snippet'] or e['body'][:100]
+        gist = gist.replace('\n', ' ')[:160]
+        lines.append(f'[{i}] From: {sender_display(e["from"])} | Subject: {e["subject"]} | Gist: {gist}')
 
     email_block = '\n'.join(lines)
 
@@ -562,6 +580,11 @@ Rules:
                 clusters.append(ids)
                 names.append(label)
                 assigned.update(ids)
+
+        if not assigned:
+            # A reply with no usable topics (seen 2026-10-21) would otherwise put
+            # every email in "Other Newsletters" silently; fall back with a notice.
+            raise ValueError('no topics in the AI reply')
 
         # Any unassigned emails go into a catch-all cluster
         unassigned = [i for i in range(len(emails)) if i not in assigned]
@@ -656,8 +679,9 @@ async def _summarize_via_openrouter(
 ) -> dict[int, str]:
     """Generate a 2-4 sentence summary for each email via OpenRouter.
 
-    Returns {email_index: summary_text}.  Falls back to the raw Gmail snippet
-    on any error or if the body is very short (< 200 chars).
+    Returns {email_index: summary_text}. A very short body (< 200 chars) is its
+    own summary (no LLM call). Emails whose LLM call fails are left out, so the
+    digest shows the Gmail snippet and the email isn't stored (retried next run).
     Processes up to 10 emails concurrently.
     Emits a progress event after each batch when there's more than one batch,
     so large digests (month range, many senders) show live progress instead
@@ -671,7 +695,7 @@ async def _summarize_via_openrouter(
         r'^(?:View image:\s*\(https?://[^)]+\)|https?://\S+|\[.*?\]\(https?://\S+\))$'
     )
 
-    async def _summarize_one(idx: int, e: dict) -> tuple[int, str]:
+    async def _summarize_one(idx: int, e: dict) -> tuple[int, str | None]:
         content = e['body'] or e['snippet']
         if len(content) < 200:
             return idx, e['snippet'] or content
@@ -704,25 +728,24 @@ async def _summarize_via_openrouter(
                     'messages': [{'role': 'user', 'content': prompt}],
                 })
                 summary = data['choices'][0]['message'].get('content', '').strip()
-                return idx, summary or e['snippet']
+                return idx, summary or None  # empty reply: not stored, retried next run
         except Exception as exc:
             failures.append(describe_llm_error(exc))
-            return idx, e['snippet'] or ''
+            return idx, None
 
-    # Process in batches of 5 concurrent requests
     failures: list[str] = []
     results: dict[int, str] = {}
-    batch_size = 10  # Phase 0 (2026-10-20): was 5
+    batch_size = 10  # concurrent requests; Phase 0 (2026-10-20): was 5
     for i in range(0, len(emails), batch_size):
         batch = [(i + j, emails[i + j]) for j in range(min(batch_size, len(emails) - i))]
         batch_results = await asyncio.gather(*[_summarize_one(idx, e) for idx, e in batch])
-        results.update(batch_results)
+        results.update((idx, s) for idx, s in batch_results if s)
         if emit_event and len(emails) > batch_size:
-            await emit_event({'type': 'searching', 'query': f'Summarized {len(results)}/{len(emails)} emails…'})
+            await emit_event({'type': 'searching', 'query': f'Summarized {i + len(batch)}/{len(emails)} new emails…'})
 
     if failures and notices is not None:
         notices.append(
-            f'Summaries are unavailable for {len(failures)} of {len(emails)} emails ({failures[0]}); '
+            f'Summaries are unavailable for {len(failures)} of {len(emails)} new emails ({failures[0]}); '
             "Gmail's preview text is shown instead."
         )
     return results
@@ -806,7 +829,11 @@ async def run_gmail_digest(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> NewsDigest:
-    """Fetch, cluster, and summarize Gmail newsletter emails into a NewsDigest.
+    """Fetch, summarize and cluster Gmail newsletter emails into a NewsDigest.
+
+    Every email in the range is included. Summaries are reused from
+    newsletter_store, so only emails not seen before (or summarized under an
+    older SUMMARY_VERSION) are fetched in full and summarized.
 
     Args:
         time_range:  'today' | 'yesterday' | 'week' | 'month' | 'custom'
@@ -861,17 +888,17 @@ async def run_gmail_digest(
                 await emit_event({'type': 'error', 'message': 'Could not load newsletter senders from database. Add senders in Manage Sources or check your database connection.'})
             return empty_digest
 
-    # ── Step 3: Fetch emails ─────────────────────────────────────────────────
+    # ── Step 3: List the emails in the range ─────────────────────────────────
     query  = build_query(start_iso, end_iso, effective_senders, subject_kw or '')
     date_label = f"{start_iso[:10]} → {end_iso[:10]}"
 
     if emit_event:
         await emit_event({'type': 'searching', 'query': f'Gmail {date_label}'})
 
-    emails, truncated = await asyncio.to_thread(fetch_emails, service, query)
+    ids, truncated = await asyncio.to_thread(list_message_ids, service, query)
 
     if emit_event:
-        n = len(emails)
+        n = len(ids)
         await emit_event({
             'type':      'results',
             'count':     n,
@@ -880,17 +907,55 @@ async def run_gmail_digest(
                          else f'Gmail ({n} email{"s" if n != 1 else ""})',
         })
 
+    if not ids:
+        return empty_digest
+
+    notices: list[str] = []
+    if truncated:
+        notices.append(f'Only the first {len(ids)} matching emails are included (the per-run limit). Narrow the date range or sender filter to see the rest.')
+
+    # ── Step 4: Reuse stored summaries; fetch only new emails (Phase 1) ─────
+    # Every email in the range is included (the digested label never filters);
+    # only emails without a current stored summary are fetched and summarized.
+    store_ok = True
+    try:
+        stored = await newsletter_store.load_emails(ids, SUMMARY_VERSION)
+    except Exception as e:
+        print(f'[newsletter] summary store unavailable ({type(e).__name__}: {e}); summarizing every email')
+        stored, store_ok = {}, False
+        notices.append('Stored summaries could not be read, so every email was summarized again.')
+
+    new_ids = [i for i in ids if i not in stored]
+    fetched = await asyncio.to_thread(fetch_emails_by_id, service, new_ids) if new_ids else []
+    fetched_by_id = {e['id']: e for e in fetched}
+    emails = [stored.get(i) or fetched_by_id.get(i) for i in ids]  # Gmail's order (newest first)
+    emails = [e for e in emails if e is not None]
     if not emails:
         return empty_digest
 
-    # ── Step 3: Tag matched emails with [gmail-ai-digested] ─────────────────
+    # ── Step 5: Tag matched emails with [gmail-ai-digested] (marker only) ───
     try:
         label_id = await asyncio.to_thread(ensure_label, service, DIGESTED_LABEL)
         await asyncio.to_thread(add_label, service, [e['id'] for e in emails], label_id)
     except Exception:
         pass  # tagging failure is non-fatal
 
-    # ── Step 4: Cluster ──────────────────────────────────────────────────────
+    # ── Step 6: Summarize new emails, store them ────────────────────────────
+    if emit_event:
+        reused = len(emails) - len(fetched)
+        await emit_event({'type': 'searching', 'query': f'Summarizing {len(fetched)} new emails ({reused} already summarized)…'})
+
+    new_summaries = await _summarize_via_openrouter(fetched, emit_event, notices)
+    for idx, e in enumerate(fetched):
+        e['summary'] = new_summaries.get(idx)
+    if store_ok:
+        try:
+            await newsletter_store.save_emails(fetched, SUMMARY_VERSION)
+            await newsletter_store.purge_expired()
+        except Exception as e:
+            print(f'[newsletter] could not store summaries ({type(e).__name__}: {e}); they will be redone next run')
+
+    # ── Step 7: Cluster (after summarizing, so grouping sees the headlines) ─
     # The user's explicit by_source choice is always honored — large email
     # counts no longer force a silent fallback to by-source grouping (that
     # AUTO_BY_SOURCE_THRESHOLD design has been retired). Large "by topic"
@@ -900,19 +965,11 @@ async def run_gmail_digest(
         mode_label = 'by source' if by_source else 'by topic'
         await emit_event({'type': 'searching', 'query': f'Clustering {len(emails)} emails {mode_label}…'})
 
-    notices: list[str] = []
-    if truncated:
-        notices.append(f'Only the first {len(emails)} matching emails are included (the per-run limit). Narrow the date range or sender filter to see the rest.')
     if by_source:
         clusters, cluster_names = _group_by_source(emails)
     else:
         clusters, cluster_names = await _cluster_via_llm_batched(emails, emit_event, notices)
 
-    # ── Step 5: Summarize ────────────────────────────────────────────────────
-    if emit_event:
-        await emit_event({'type': 'searching', 'query': f'Summarizing {len(emails)} emails…'})
-
-    summaries = await _summarize_via_openrouter(emails, emit_event, notices)
-
-    # ── Step 6: Assemble digest ──────────────────────────────────────────────
+    # ── Step 8: Assemble digest ──────────────────────────────────────────────
+    summaries = {idx: e['summary'] for idx, e in enumerate(emails) if e.get('summary')}
     return _build_newsletter_digest(emails, clusters, cluster_names, summaries, time_range, tz_name, notices)
