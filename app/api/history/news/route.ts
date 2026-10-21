@@ -77,8 +77,10 @@ export async function POST(req: NextRequest) {
         digest: JSON.stringify(digest),
         mode: mode ?? null,
         locked: !!locked,
-        label: label ?? null,
-        tags: tags ?? [],
+        // Replacing a saved digest (Re-run & replace, historical auto-save) keeps
+        // its name and tags unless the caller sends new ones.
+        ...(label !== undefined && { label: label ?? null }),
+        ...(tags !== undefined && { tags: tags ?? [] }),
         articleCount: articleCount ?? 0,
         rangeStart: rangeStart ?? null,
         rangeEnd: rangeEnd ?? null,
