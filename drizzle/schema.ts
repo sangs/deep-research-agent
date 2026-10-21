@@ -1,4 +1,4 @@
-import { pgTable, text, bigint, boolean, integer, doublePrecision, uniqueIndex, index, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, text, bigint, boolean, integer, doublePrecision, jsonb, uniqueIndex, index, primaryKey } from 'drizzle-orm/pg-core';
 
 export const researchSessions = pgTable('research_sessions', {
   id: text('id').primaryKey(),
@@ -77,3 +77,21 @@ export const rateLimitCounters = pgTable('rate_limit_counters', {
   windowStart: bigint('window_start', { mode: 'number' }).notNull(), // epoch seconds
   count: integer('count').notNull(),
 }, (table) => [primaryKey({ columns: [table.userId, table.bucket, table.windowStart] })]);
+
+// ── Gmail organize audit log (backend/services/gmail_organizer.py) ──────────
+// One row per user-initiated label/move/organize. `before` holds each
+// message's label ids before the change, so the action can be undone exactly.
+// Written and read by the backend (asyncpg); defined here so Drizzle owns the schema.
+export const gmailActions = pgTable('gmail_actions', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(), // 'move' | 'label' | 'organize'
+  actor: text('actor').notNull(), // signed-in email that triggered it
+  messageIds: text('message_ids').array().notNull(),
+  addedLabelIds: text('added_label_ids').array().notNull(),
+  removedLabelIds: text('removed_label_ids').array().notNull(),
+  labelNames: text('label_names').array().notNull(),
+  before: jsonb('before').notNull(), // { messageId: labelIds[] }
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  undoneAt: bigint('undone_at', { mode: 'number' }),
+  undoneBy: text('undone_by'),
+}, (table) => [index('gmail_actions_created_idx').on(table.createdAt)]);

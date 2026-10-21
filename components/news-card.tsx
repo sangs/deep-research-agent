@@ -15,6 +15,7 @@ export interface ArticleItem {
   published_date: string | null;
   excerpt: string;
   links?: string[];   // newsletter only
+  message_id?: string; // Gmail message id (newsletter only) — enables organize actions
 }
 
 interface NewsCardProps {

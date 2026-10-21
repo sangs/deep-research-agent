@@ -14,7 +14,7 @@ from fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.requests import Request
-from starlette.responses import Response, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 
 from tools.news_tools import register_tools
@@ -124,12 +124,81 @@ async def digest_endpoint(request: Request) -> Response:
     )
 
 
+
+# ── Gmail organize endpoints (all writes go through services/gmail_organizer.py) ──
+# The backend is private (Cloud Run IAM); the Next.js /api/gmail proxy is the
+# only caller, restricts it to the owner, and supplies `actor` from the session.
+async def _gmail_json(handler):
+    from services.gmail_organizer import GmailGuardError
+    try:
+        return JSONResponse(await handler())
+    except GmailGuardError as e:
+        return JSONResponse({'error': str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({'error': f'Gmail request failed: {e}'}, status_code=502)
+
+
+async def gmail_labels_endpoint(request: Request) -> Response:
+    from services.gmail_service import get_gmail_service
+    from services.gmail_organizer import list_user_labels
+
+    async def run():
+        service = await asyncio.to_thread(get_gmail_service)
+        return {'labels': await asyncio.to_thread(list_user_labels, service)}
+    return await _gmail_json(run)
+
+
+async def gmail_actions_endpoint(request: Request) -> Response:
+    from services.gmail_organizer import list_actions
+    limit = min(int(request.query_params.get('limit', '20')), 100)
+
+    async def run():
+        return {'actions': await list_actions(limit)}
+    return await _gmail_json(run)
+
+
+async def gmail_apply_endpoint(request: Request) -> Response:
+    """POST {kind: 'move'|'label'|'organize', actor, groups: [{label, message_ids}], move: bool, confirm_bulk?: bool}"""
+    from services.gmail_service import get_gmail_service
+    from services.gmail_organizer import apply_groups
+    body = await request.json()
+
+    async def run():
+        groups = [
+            {'label': g['label'], 'message_ids': [m for m in g.get('message_ids', []) if isinstance(m, str) and m]}
+            for g in body.get('groups', []) if g.get('label')
+        ]
+        groups = [g for g in groups if g['message_ids']]
+        service = await asyncio.to_thread(get_gmail_service)
+        return await apply_groups(
+            service, body.get('kind', 'label'), body.get('actor', 'unknown'), groups,
+            move=bool(body.get('move')), confirm_bulk=bool(body.get('confirm_bulk')),
+        )
+    return await _gmail_json(run)
+
+
+async def gmail_undo_endpoint(request: Request) -> Response:
+    """POST {action_id, actor}"""
+    from services.gmail_service import get_gmail_service
+    from services.gmail_organizer import undo_action
+    body = await request.json()
+
+    async def run():
+        service = await asyncio.to_thread(get_gmail_service)
+        return await undo_action(service, body.get('action_id', ''), body.get('actor', 'unknown'))
+    return await _gmail_json(run)
+
+
 # ── Mount everything on a single Starlette app ───────────────────────────────
 def create_app():
     mcp_app = mcp.http_app(path='/mcp')
 
     routes = [
         Route('/digest', endpoint=digest_endpoint, methods=['POST']),
+        Route('/gmail/labels', endpoint=gmail_labels_endpoint, methods=['GET']),
+        Route('/gmail/actions', endpoint=gmail_actions_endpoint, methods=['GET']),
+        Route('/gmail/apply', endpoint=gmail_apply_endpoint, methods=['POST']),
+        Route('/gmail/undo', endpoint=gmail_undo_endpoint, methods=['POST']),
     ]
 
     # The MCP sub-app's lifespan starts its session manager (task group);

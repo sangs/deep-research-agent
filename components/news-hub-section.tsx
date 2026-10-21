@@ -5,6 +5,7 @@ import { Settings } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { NewsCategoryPanel } from '@/components/news-category-panel';
 import { SourceManager } from '@/components/source-manager';
+import { GmailOrganizeProvider } from '@/components/gmail-organize';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 
@@ -146,14 +147,16 @@ export function NewsHubSection() {
           </TabsContent>
 
           <TabsContent value="newsletter" forceMount className="mt-0 border border-t-0 rounded-b-lg min-h-[580px] flex flex-col data-[state=inactive]:hidden">
-            <NewsCategoryPanel
-              icon="📬"
-              title="Newsletter Subscriptions"
-              description="Pull and summarize newsletter emails from your Gmail inbox"
-              mode="newsletter"
-              onStatusChange={handleNewsletterStatus}
-              onManageSources={() => setSourceManagerOpen(true)}
-            />
+            <GmailOrganizeProvider>
+              <NewsCategoryPanel
+                icon="📬"
+                title="Newsletter Subscriptions"
+                description="Pull and summarize newsletter emails from your Gmail inbox"
+                mode="newsletter"
+                onStatusChange={handleNewsletterStatus}
+                onManageSources={() => setSourceManagerOpen(true)}
+              />
+            </GmailOrganizeProvider>
           </TabsContent>
         </Tabs>
       </div>

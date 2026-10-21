@@ -1,9 +1,7 @@
 import { randomUUID } from 'crypto';
-import { backendAuthHeaders } from '@/lib/backend-auth';
+import { BACKEND_URL, backendAuthHeaders } from '@/lib/backend-auth';
 import { sessionUserId } from '@/lib/user-id';
 import { guardRun, recordUsage, type UsageItem } from '@/lib/usage';
-
-const BACKEND_URL = (process.env.BACKEND_URL ?? 'http://localhost:8010').replace(/\/+$/, '');
 
 // Large newsletter digests (month range, many senders) can take minutes to
 // fetch/cluster/summarize — the backend now streams progress incrementally

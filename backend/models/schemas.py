@@ -9,6 +9,7 @@ class ArticleItem(BaseModel):
     published_date: Optional[str] = None
     excerpt: str          # first 300 chars of text
     links: list[str] = []  # additional URLs from the email (newsletter only)
+    message_id: Optional[str] = None  # Gmail message id (newsletter only) — used by organize actions
 
 
 class TopicCluster(BaseModel):

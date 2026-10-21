@@ -6,6 +6,9 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project --no-dev
 COPY . .
 RUN uv sync --frozen --no-dev
+# Gmail never-delete guarantee: the build fails if any backend code can trash,
+# delete or send mail, or writes to Gmail outside services/gmail_organizer.py.
+RUN /app/.venv/bin/python -m unittest discover -s tests -v
 
 # ---- Runtime: slim image, no build tools ----
 FROM python:3.12-slim-bookworm AS runtime
