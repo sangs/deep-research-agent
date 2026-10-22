@@ -52,6 +52,8 @@ async def digest_endpoint(request: Request) -> Response:
     # Custom date range (only used when time_range == 'custom')
     start_date = body.get('start_date') or None
     end_date   = body.get('end_date') or None
+    # Set by the Next.js proxy from the session (the backend is private, only it can call)
+    requested_by = body.get('user_id') or None
 
     async def event_stream():
         # Events are pushed onto a queue by the pipeline (running as a
@@ -83,6 +85,7 @@ async def digest_endpoint(request: Request) -> Response:
                         tz_name=tz_name,
                         start_date=start_date,
                         end_date=end_date,
+                        requested_by=requested_by,
                     )
                 else:
                     from services.openrouter import run_news_agent
@@ -96,7 +99,8 @@ async def digest_endpoint(request: Request) -> Response:
                         emit_event=emit,
                         tz_name=tz_name,
                     )
-                await queue.put({'type': 'digest', **digest.model_dump()})
+                if digest is not None:  # None: newsletter summarizing handed to the background job
+                    await queue.put({'type': 'digest', **digest.model_dump()})
                 await queue.put({'type': 'done'})
             except Exception as e:
                 await queue.put({'type': 'error', 'message': str(e)})
@@ -189,6 +193,37 @@ async def gmail_undo_endpoint(request: Request) -> Response:
     return await _gmail_json(run)
 
 
+# ── Newsletter background summarizing: owner controls (services/ingest.py) ──
+# Same trust model as the Gmail endpoints: only the Next.js proxy can call,
+# it restricts these to the owner and supplies `actor` from the session.
+async def ingest_status_endpoint(request: Request) -> Response:
+    from services import ingest
+    return JSONResponse(await ingest.status())
+
+
+async def ingest_settings_endpoint(request: Request) -> Response:
+    """POST {enabled: bool, actor}"""
+    from services import ingest
+    body = await request.json()
+    if not isinstance(body.get('enabled'), bool):
+        return JSONResponse({'error': 'enabled must be true or false'}, status_code=400)
+    return JSONResponse(await ingest.set_enabled(body['enabled'], body.get('actor', 'unknown')))
+
+
+async def ingest_run_endpoint(request: Request) -> Response:
+    """POST {actor} — start a sweep now instead of waiting for the next slot."""
+    from services import ingest
+    body = await request.json()
+    if not (await ingest.get_settings())['enabled']:
+        return JSONResponse({'error': 'Background summarizing is paused; turn it on first'}, status_code=409)
+    try:
+        await ingest.start_execution(sweep=True)
+    except Exception as e:
+        return JSONResponse({'error': f'Could not start the job: {e}'}, status_code=502)
+    print(f'[ingest] sweep started now by {body.get("actor", "unknown")}')
+    return JSONResponse({'ok': True})
+
+
 # ── Mount everything on a single Starlette app ───────────────────────────────
 def create_app():
     mcp_app = mcp.http_app(path='/mcp')
@@ -199,6 +234,9 @@ def create_app():
         Route('/gmail/actions', endpoint=gmail_actions_endpoint, methods=['GET']),
         Route('/gmail/apply', endpoint=gmail_apply_endpoint, methods=['POST']),
         Route('/gmail/undo', endpoint=gmail_undo_endpoint, methods=['POST']),
+        Route('/ingest/status', endpoint=ingest_status_endpoint, methods=['GET']),
+        Route('/ingest/settings', endpoint=ingest_settings_endpoint, methods=['POST']),
+        Route('/ingest/run', endpoint=ingest_run_endpoint, methods=['POST']),
     ]
 
     # The MCP sub-app's lifespan starts its session manager (task group);

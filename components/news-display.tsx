@@ -11,10 +11,62 @@ type NewsStreamEvent =
   | { type: 'searching'; query: string }
   | { type: 'results'; count: number; total?: number; query: string }
   | { type: 'digest'; mode: string; time_range: string; region: string | null; generated_at: string; topics: NewsDigest['topics'] }
+  | { type: 'ingest'; job_id: string; status: string; total: number; done: number; query: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
 
 type Status = 'idle' | 'loading' | 'done' | 'error';
+
+/** Newsletter scale-out Phase 2: a run with many unsummarized emails hands them
+ *  to the backend's background job (backend/services/ingest.py). The hook polls
+ *  the job and re-runs the same request when it finishes. */
+export type IngestProgress = {
+  jobId: string;
+  status: string; // 'queued' | 'running' | 'done' | 'failed' | 'capped'
+  total: number;
+  done: number;
+  failed: number;
+  error: string | null;
+};
+
+const INGEST_POLL_MS = 5000;
+const INGEST_MAX_WAIT_MS = 75 * 60 * 1000; // the job's own timeout is 60 min
+const INGEST_MAX_RESUMES = 3; // re-runs after jobs, per click (each one shrinks the unsummarized set)
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+  });
+}
+
+/** Polls GET /api/newsletter/jobs/:id until the job ends, reporting progress.
+ *  Returns null when aborted (the user pressed Stop). */
+async function waitForIngestJob(
+  jobId: string,
+  signal: AbortSignal,
+  onProgress: (p: IngestProgress) => void,
+): Promise<IngestProgress | null> {
+  const deadline = Date.now() + INGEST_MAX_WAIT_MS;
+  while (!signal.aborted) {
+    try {
+      const res = await fetch(`/api/newsletter/jobs/${jobId}`, { signal });
+      if (res.ok) {
+        const p = { jobId, ...(await res.json()) } as IngestProgress;
+        onProgress(p);
+        if (!['queued', 'running'].includes(p.status)) return p;
+      }
+    } catch {
+      if (signal.aborted) return null;
+      // transient network error: keep polling
+    }
+    if (Date.now() > deadline) {
+      return { jobId, status: 'failed', total: 0, done: 0, failed: 0, error: 'the background job took longer than 75 minutes' };
+    }
+    await sleep(INGEST_POLL_MS, signal);
+  }
+  return null;
+}
 
 type ThreadEntry = {
   question: string | undefined;
@@ -29,6 +81,7 @@ export function useNewsStream() {
   const [thread, setThread] = useState<ThreadEntry[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [ingest, setIngest] = useState<IngestProgress | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Ref keeps thread current inside async run() and sync stop()/reset()
   const threadRef = useRef<ThreadEntry[]>([]);
@@ -53,6 +106,7 @@ export function useNewsStream() {
   function restore(cachedDigest: NewsDigest, question?: string) {
     abortRef.current?.abort();
     abortRef.current = null;
+    setIngest(null);
     _appendToThread({ question, digest: cachedDigest, fromCache: true });
     setStatus('done');
     setEvents([]);
@@ -63,6 +117,7 @@ export function useNewsStream() {
   function stop() {
     abortRef.current?.abort();
     abortRef.current = null;
+    setIngest(null);
     setStatus(threadRef.current.length > 0 ? 'done' : 'idle');
     setEvents([]);
     setErrorMsg(null);
@@ -72,6 +127,7 @@ export function useNewsStream() {
   function reset() {
     abortRef.current?.abort();
     abortRef.current = null;
+    setIngest(null);
     _clearThread();
     setStatus('idle');
     setEvents([]);
@@ -90,7 +146,7 @@ export function useNewsStream() {
     // custom date range — only used when time_range === 'custom'
     start_date?: string;
     end_date?: string;
-  }) {
+  }, resumes = 0) {
     // Cancel any in-flight request
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -99,6 +155,7 @@ export function useNewsStream() {
     setStatus('loading');
     setEvents([]);
     setErrorMsg(null);
+    setIngest(null);
 
     // Build conversation history from existing thread so the backend can avoid
     // repeating topics already covered and search for new angles.
@@ -122,6 +179,8 @@ export function useNewsStream() {
     // If an error event arrives, suppress appending the (empty) digest to the thread
     // so the error message remains visible rather than showing "No results found".
     let hadError = false;
+    // Set when the backend handed the summarizing to its background job.
+    let ingestJob: IngestProgress | null = null;
 
     try {
       const res = await fetch('/api/news', {
@@ -161,7 +220,11 @@ export function useNewsStream() {
             try {
               const event = JSON.parse(raw) as NewsStreamEvent;
 
-              if (event.type === 'done') {
+              if (event.type === 'ingest') {
+                ingestJob = { jobId: event.job_id, status: event.status, total: event.total, done: event.done, failed: 0, error: null };
+                setIngest(ingestJob);
+              } else if (event.type === 'done') {
+                if (ingestJob) continue; // no digest yet: wait for the job below
                 if (newDigest && !hadError) {
                   _appendToThread({ question: request.question, digest: newDigest, fromCache: false });
                 }
@@ -185,6 +248,20 @@ export function useNewsStream() {
       } finally {
         reader.cancel();
       }
+
+      if (ingestJob && !hadError) {
+        const outcome = await waitForIngestJob(ingestJob.jobId, controller.signal, setIngest);
+        if (!outcome) return; // stopped
+        if (outcome.status === 'done' && outcome.failed < outcome.total && resumes < INGEST_MAX_RESUMES) {
+          return run(request, resumes + 1); // everything summarized: build the digest
+        }
+        setErrorMsg(
+          outcome.status === 'capped'
+            ? 'Background summarizing stopped at its daily spending cap. Summaries made so far are saved; click Run to continue.'
+            : `Background summarizing didn't finish (${outcome.error ?? `${outcome.failed} of ${outcome.total} summaries failed`}). Summaries made so far are saved; click Run to continue.`,
+        );
+        setStatus('error');
+      }
     } catch (e) {
       if (e instanceof Error && e.name === 'AbortError') return; // user stopped — stay as-is
       setErrorMsg(e instanceof Error ? e.message : 'Unknown error');
@@ -194,7 +271,7 @@ export function useNewsStream() {
     }
   }
 
-  return { events, digest, thread, status, errorMsg, fromCache, run, stop, restore, reset };
+  return { events, digest, thread, status, errorMsg, fromCache, ingest, run, stop, restore, reset };
 }
 
 interface NewsDisplayProps {

@@ -86,7 +86,8 @@ export async function POST(req: Request): Promise<Response> {
   const upstream = await fetch(`${BACKEND_URL}/digest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
-    body: JSON.stringify(body),
+    // user_id: charged for a newsletter background job (backend/services/ingest.py)
+    body: JSON.stringify({ ...body, user_id: userId }),
     signal: req.signal,
   });
   if (!upstream.ok || !upstream.body) {
