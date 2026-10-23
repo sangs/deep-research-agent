@@ -316,8 +316,8 @@ function BackgroundSummarizing() {
         body: JSON.stringify(body),
       });
       const d = await r.json().catch(() => ({}));
+      await load(); // refresh the section first, so the message never contradicts it
       setMessage(r.ok ? done : d.error ?? `Failed (HTTP ${r.status})`);
-      await load();
     } finally {
       setBusy(false);
     }
