@@ -14,3 +14,10 @@ async def get_pool() -> asyncpg.Pool:
             statement_cache_size=0,  # required for Supabase PgBouncer (transaction pooling mode)
         )
     return _pool
+
+
+async def close_pool() -> None:
+    global _pool
+    if _pool is not None:
+        await _pool.close()
+        _pool = None

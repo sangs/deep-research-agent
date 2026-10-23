@@ -259,6 +259,141 @@ function ProviderAccounts() {
   );
 }
 
+interface IngestStatus {
+  enabled: boolean;
+  updated_by: string | null;
+  updated_at: number | null;
+  daily_cap_usd: number;
+  spent_today_usd: number;
+  schedule: string;
+  active_jobs: number;
+  last_sweep: {
+    status: string;
+    total: number;
+    done_count: number;
+    failed_count: number;
+    error: string | null;
+    started_at: number | null;
+    finished_at: number | null;
+  } | null;
+}
+
+const SWEEP_STATUS: Record<string, string> = {
+  done: 'finished',
+  running: 'running',
+  queued: 'waiting to start',
+  failed: 'failed',
+  capped: 'stopped at the daily cap',
+};
+
+/** Owner-only: pause/resume the scheduled newsletter sweep (backend/services/ingest.py). */
+function BackgroundSummarizing() {
+  const [info, setInfo] = useState<IngestStatus | null>(null);
+  const [hidden, setHidden] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function load() {
+    try {
+      const r = await fetch('/api/newsletter/ingest/status', { cache: 'no-store' });
+      if (!r.ok) return setHidden(true);
+      setInfo(await r.json());
+    } catch {
+      setHidden(true);
+    }
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function post(op: 'settings' | 'run', body: object, done: string) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const r = await fetch(`/api/newsletter/ingest/${op}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      await load(); // refresh the section first, so the message never contradicts it
+      setMessage(r.ok ? done : d.error ?? `Failed (HTTP ${r.status})`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (hidden || !info) return null;
+  const last = info.last_sweep;
+  const capPct = Math.min(100, (info.spent_today_usd / info.daily_cap_usd) * 100);
+  return (
+    <Section
+      title="Newsletter background summarizing (owner only)"
+      aside={
+        <Button
+          size="sm"
+          variant={info.enabled ? 'outline' : 'default'}
+          disabled={busy}
+          onClick={() =>
+            post('settings', { enabled: !info.enabled }, info.enabled ? 'Paused. Scheduled checks now exit at once.' : 'Resumed.')
+          }
+        >
+          {info.enabled ? 'Pause' : 'Resume'}
+        </Button>
+      }
+    >
+      <p className="text-sm">
+        <span className="font-medium">{info.enabled ? 'On' : 'Paused'}</span>
+        <span className="text-muted-foreground">
+          {info.enabled
+            ? `: checks your newsletter senders for new mail ${info.schedule} and summarizes it, so digests open fast.`
+            : ': scheduled checks exit without calling Gmail or the AI model. Large Runs you start still summarize in the background.'}
+          {info.updated_by && info.updated_at && ` Last changed by ${info.updated_by}, ${new Date(info.updated_at).toLocaleString()}.`}
+        </span>
+      </p>
+      <dl className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+        <div>
+          <dt className="text-muted-foreground">Scheduled spend today (UTC)</dt>
+          <dd className="font-medium tabular-nums">
+            {formatUsd(info.spent_today_usd)} of {formatUsd(info.daily_cap_usd)} cap
+          </dd>
+          <div className="mt-1.5 h-1.5 w-full max-w-56 rounded-full bg-muted overflow-hidden">
+            <div className={`h-full ${SERIES}`} style={{ width: `${capPct}%` }} />
+          </div>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Last check</dt>
+          <dd className="font-medium">
+            {!last
+              ? 'None yet'
+              : `${last.started_at ? new Date(last.started_at).toLocaleString() : '—'}: ${SWEEP_STATUS[last.status] ?? last.status}, ` +
+                `${last.total === 0 ? 'nothing new' : `${last.done_count} of ${last.total} summarized`}` +
+                (last.failed_count ? ` (${last.failed_count} failed)` : '')}
+          </dd>
+          {last?.error && <p className="text-xs text-muted-foreground mt-0.5">{last.error}</p>}
+        </div>
+      </dl>
+      <div className="mt-4 flex items-center gap-3">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy || !info.enabled || info.active_jobs > 0}
+          onClick={() => post('run', {}, 'Started. Refresh this page in a minute to see the result.')}
+        >
+          Check now
+        </Button>
+        {info.active_jobs > 0 && <span className="text-xs text-muted-foreground">A job is running.</span>}
+        {message && <span className="text-xs text-muted-foreground">{message}</span>}
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        Emergency stop if the app is down:{' '}
+        <code>gcloud scheduler jobs pause newsletter-ingest-every-30-min --location=us-central1</code> (
+        <code>resume</code> to restart).
+      </p>
+    </Section>
+  );
+}
+
 export default function UsagePage() {
   const summary = useUsage();
   return (
@@ -290,6 +425,7 @@ export default function UsagePage() {
             </ul>
           </Section>
           <ProviderAccounts />
+          <BackgroundSummarizing />
         </>
       )}
     </main>

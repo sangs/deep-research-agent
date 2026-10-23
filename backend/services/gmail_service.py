@@ -52,7 +52,7 @@ from tools.date_utils import resolve_date_range, format_header_date, now_iso
 from tools.news_tools import load_sources
 from services.llm import chat_completion, describe_llm_error
 from services.gmail_organizer import ensure_label, add_label
-from services import newsletter_store
+from services import ingest, newsletter_store
 
 load_dotenv()
 
@@ -828,12 +828,18 @@ async def run_gmail_digest(
     tz_name: str = 'UTC',
     start_date: str | None = None,
     end_date: str | None = None,
-) -> NewsDigest:
+    requested_by: str | None = None,
+) -> NewsDigest | None:
     """Fetch, summarize and cluster Gmail newsletter emails into a NewsDigest.
 
     Every email in the range is included. Summaries are reused from
     newsletter_store, so only emails not seen before (or summarized under an
     older SUMMARY_VERSION) are fetched in full and summarized.
+
+    Phase 2: when more than ingest.INLINE_SUMMARY_LIMIT emails need a summary
+    and the caller is a signed-in user (`requested_by`), they are summarized by
+    the background job instead: an 'ingest' event carries the job, and the
+    function returns None (no digest yet; the UI re-runs when the job is done).
 
     Args:
         time_range:  'today' | 'yesterday' | 'week' | 'month' | 'custom'
@@ -846,9 +852,12 @@ async def run_gmail_digest(
         start_date:  'YYYY-MM-DD' — only used when time_range == 'custom'.
         end_date:    'YYYY-MM-DD' — only used when time_range == 'custom'; defaults
                      to start_date (single-day digest) when omitted.
+        requested_by: User id charged for a background job; None (e.g. MCP
+                     callers) always summarizes inline.
 
     Returns:
-        NewsDigest with mode='newsletter', topics populated from email clusters.
+        NewsDigest with mode='newsletter', topics populated from email clusters,
+        or None when the summarizing was handed to the background job.
     """
     dates      = resolve_date_range(time_range, tz_name, start_date, end_date)
     start_iso  = dates['start']
@@ -926,6 +935,25 @@ async def run_gmail_digest(
         notices.append('Stored summaries could not be read, so every email was summarized again.')
 
     new_ids = [i for i in ids if i not in stored]
+
+    # ── Step 4b: Too many to summarize within the request → background job ──
+    if requested_by and store_ok and len(new_ids) > ingest.INLINE_SUMMARY_LIMIT:
+        try:
+            job = await ingest.request_job(new_ids, requested_by, tz_name)
+        except Exception as e:
+            print(f'[newsletter] could not queue a background job ({type(e).__name__}: {e}); summarizing inline')
+        else:
+            if emit_event:
+                await emit_event({
+                    'type':   'ingest',
+                    'job_id': job['id'],
+                    'status': job['status'],
+                    'total':  job['total'],
+                    'done':   job['done_count'],
+                    'query':  f'Summarizing {len(new_ids)} new emails in the background ({len(stored)} already summarized)…',
+                })
+            return None
+
     fetched = await asyncio.to_thread(fetch_emails_by_id, service, new_ids) if new_ids else []
     fetched_by_id = {e['id']: e for e in fetched}
     emails = [stored.get(i) or fetched_by_id.get(i) for i in ids]  # Gmail's order (newest first)

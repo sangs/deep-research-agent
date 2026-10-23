@@ -43,6 +43,13 @@
       "when": 1792602500749,
       "tag": "0005_newsletter_emails",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792633354574,
+      "tag": "0006_ingest_jobs",
+      "breakpoints": true
     }
   ]
 }

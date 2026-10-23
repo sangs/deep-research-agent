@@ -126,7 +126,7 @@ export function NewsCategoryPanel({
   onStatusChange,
   onManageSources,
 }: NewsCategoryPanelProps) {
-  const { events, digest, thread, status, errorMsg, fromCache, run, stop, restore, reset } = useNewsStream();
+  const { events, digest, thread, status, errorMsg, fromCache, ingest, run, stop, restore, reset } = useNewsStream();
   const { ensureBudget } = useBudgetGate();
   const usageFeature = mode === 'newsletter' ? 'newsletter' : 'news';
 
@@ -701,6 +701,30 @@ export function NewsCategoryPanel({
               {mode === 'newsletter'
                 ? 'Set filters above and click Run to pull emails from Gmail'
                 : 'Enter a question and click Run ⌘↵'}
+            </p>
+          </div>
+
+        ) : thread.length === 0 && status === 'loading' && ingest ? (
+          // Newsletter Phase 2: summarizing handed to the backend's background job
+          <div className="flex flex-col items-center justify-center h-full py-10 gap-3 text-center">
+            <p className="text-xs text-foreground">
+              {ingest.status === 'queued'
+                ? `Starting background summarizing of ${ingest.total} new emails…`
+                : ingest.status === 'done'
+                ? 'Summaries ready. Building the digest…'
+                : `Summarizing new emails in the background: ${ingest.done} of ${ingest.total}`}
+            </p>
+            {ingest.total > 0 && (
+              <div className="w-56 h-1.5 rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full bg-primary transition-all"
+                  style={{ width: `${Math.round((100 * ingest.done) / ingest.total)}%` }}
+                />
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground max-w-sm">
+              The digest opens here when it&apos;s done. You can leave this page: summaries are saved as they finish,
+              and clicking Run again later picks up where it left off.
             </p>
           </div>
 

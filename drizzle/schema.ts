@@ -113,3 +113,39 @@ export const newsletterEmails = pgTable('newsletter_emails', {
   summaryVersion: integer('summary_version').notNull(), // SUMMARY_VERSION in gmail_service.py; older rows are re-summarized
   createdAt: bigint('created_at', { mode: 'number' }).notNull(), // epoch ms; retention purge uses this
 }, (table) => [index('newsletter_emails_created_idx').on(table.createdAt)]);
+
+// ── Newsletter ingest jobs (backend/services/ingest.py, jobs/ingest.py) ─────
+// Scale-out Phase 2: summarizing runs outside the request path. A digest run
+// with many unsummarized emails queues an on_demand row; the Cloud Run Job
+// `newsletter-ingest` claims queued rows, then sweeps new mail (a scheduled
+// row per sweep). Rows are the queue, the progress the UI polls, and the
+// record of what each job spent.
+export const ingestJobs = pgTable('ingest_jobs', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(), // 'on_demand' | 'scheduled'
+  status: text('status').notNull(), // 'queued' | 'running' | 'done' | 'failed' | 'capped'
+  messageIds: text('message_ids').array().notNull(), // on_demand: emails to summarize; scheduled: filled when the sweep lists them
+  requestedBy: text('requested_by'), // user id charged for an on_demand job; null for scheduled sweeps
+  timezone: text('timezone'), // requester's IANA timezone (usage day)
+  total: integer('total').notNull().default(0),
+  doneCount: integer('done_count').notNull().default(0),
+  failedCount: integer('failed_count').notNull().default(0),
+  costUsd: doublePrecision('cost_usd').notNull().default(0),
+  error: text('error'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(), // epoch ms
+  startedAt: bigint('started_at', { mode: 'number' }),
+  finishedAt: bigint('finished_at', { mode: 'number' }),
+}, (table) => [
+  index('ingest_jobs_status_created_idx').on(table.status, table.createdAt),
+  index('ingest_jobs_kind_created_idx').on(table.kind, table.createdAt),
+]);
+
+// Owner-controlled switches, one JSON value per key. 'newsletter_ingest':
+// { enabled } — pauses the scheduled newsletter sweep (backend/services/ingest.py).
+// A missing row means the default (enabled).
+export const appSettings = pgTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull(),
+  updatedBy: text('updated_by').notNull(), // signed-in email that changed it
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(), // epoch ms
+});
