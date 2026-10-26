@@ -12,9 +12,9 @@ import { useNewsStream } from '@/components/news-display';
 import { useBudgetGate } from '@/components/budget-gate';
 import { RunCostHint } from '@/components/run-cost-hint';
 import { GmailActivityButton, OrganizeInboxButton } from '@/components/gmail-organize';
-import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, Bookmark } from 'lucide-react';
+import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, RefreshCw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, Bookmark } from 'lucide-react';
 import { getCachedDigest, saveDigestToCache, buildCacheKey, buildNewsletterCacheKey } from '@/lib/history-client';
-import { toLocalDateKey, resolveTimeRangeStart } from '@/lib/date-utils';
+import { toLocalDateKey, resolveTimeRangeStart, formatRelativeTime } from '@/lib/date-utils';
 
 // Newsletter cache rows never expire — Lock adds them, Re-run & replace overwrites them, Saved Digests → Unlock removes them.
 // Set to year 2286 (far-future Unix timestamp) so the WHERE expires_at > now() filter always passes.
@@ -147,6 +147,22 @@ export function NewsCategoryPanel({
   const [expandedPriorRuns, setExpandedPriorRuns] = useState<Set<number>>(new Set());
   const [showScrollTop, setShowScrollTop] = useState(false);
   const lastRunParamsRef = useRef<{ cacheKey: string } | null>(null);
+  // The thread's first run (the only cached one), so Refresh can repeat it.
+  const firstRunRef = useRef<{
+    cacheKey: string;
+    request: { question?: string; mode: string; time_range: string; region?: string };
+  } | null>(null);
+  const [refreshConfirm, setRefreshConfirm] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  // Re-render every minute so "fetched X ago" stays current.
+  const [, setMinuteTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setMinuteTick((n) => n + 1), 60_000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
+    if (status !== 'loading') setRefreshing(false);
+  }, [status]);
   const bodyBottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -246,23 +262,54 @@ export function NewsCategoryPanel({
     const effectiveTimeRange = mode === 'research' ? 'week' : timeRange;
     const effectiveRegion = mode === 'region' ? region : undefined;
     const cacheKey = buildCacheKey(mode, effectiveTimeRange, effectiveRegion, question);
-    lastRunParamsRef.current = { cacheKey };
-
-    // Check cache before hitting the backend
-    const cached = await getCachedDigest(cacheKey);
-    if (cached) {
-      restore(cached, question.trim() || undefined);
-      return;
-    }
-    if (!(await ensureBudget('news'))) return; // cache hits above are free
-
-    run({
+    const request = {
       question: question.trim() || undefined,
       mode,
       time_range: effectiveTimeRange,
       region: effectiveRegion,
-    });
+    };
+    setRefreshConfirm(false);
+
+    // Only a thread's first result is cached. A follow-up is answered in the
+    // context of the runs above it (conversation_history), so caching it by
+    // the question alone would serve it out of context, and vice versa
+    // (caching_strategy.md Part 0.3).
+    const isFollowUp = thread.length > 0;
+    lastRunParamsRef.current = isFollowUp ? null : { cacheKey };
+    if (!isFollowUp) {
+      firstRunRef.current = { cacheKey, request };
+      const cached = await getCachedDigest(cacheKey);
+      if (cached) {
+        restore(cached, request.question);
+        return;
+      }
+    }
+    if (!(await ensureBudget('news'))) return; // cache hits above are free
+
+    run(request);
   }
+
+  // Refresh a cached first result: run it again without the cache. The thread
+  // is replaced only when the run succeeds (the save effect then replaces the
+  // cached row with a new 1 h expiry); a failed or stopped run keeps it.
+  // Follow-ups were built on the old result, so they are cleared, after asking.
+  async function handleRefresh() {
+    const first = firstRunRef.current;
+    if (!first) return;
+    if (thread.length > 1 && !refreshConfirm) {
+      setRefreshConfirm(true);
+      return;
+    }
+    setRefreshConfirm(false);
+    if (!(await ensureBudget('news'))) return;
+    lastRunParamsRef.current = { cacheKey: first.cacheKey };
+    setRefreshing(true);
+    run(first.request, 0, { replaceThread: true });
+  }
+
+  const canRefresh =
+    mode !== 'newsletter' && thread.length > 0 && thread[0].fromCache && status !== 'loading' && !!firstRunRef.current;
+  const followUpCount = Math.max(0, thread.length - 1);
 
   // Save digest to cache after a fresh (non-cached) run completes (non-newsletter tabs)
   useEffect(() => {
@@ -366,6 +413,21 @@ export function NewsCategoryPanel({
           )}
           {status === 'done' && digest && (
             <div className="flex items-center gap-1.5">
+              {mode !== 'newsletter' && (
+                <span className="text-xs text-muted-foreground" title={new Date(digest.generated_at).toLocaleString()}>
+                  fetched {formatRelativeTime(Date.parse(digest.generated_at) / 1000)}
+                </span>
+              )}
+              {canRefresh && !refreshConfirm && (
+                <button
+                  onClick={handleRefresh}
+                  title="Run the first question again instead of using the saved copy"
+                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Refresh
+                </button>
+              )}
               {fromCache && (
                 <Badge variant="outline" className="text-xs gap-1 text-primary border-primary/30 bg-primary/5">
                   <Zap className="h-2.5 w-2.5" />
@@ -395,6 +457,16 @@ export function NewsCategoryPanel({
             </button>
           )}
         </div>
+
+        {canRefresh && refreshConfirm && (
+          <div role="alert" className="flex flex-wrap items-center gap-2 text-xs rounded-md border border-border bg-background px-2.5 py-1.5">
+            <span>
+              This clears your {followUpCount} follow-up question{followUpCount !== 1 ? 's' : ''}. Refresh anyway?
+            </span>
+            <Button size="sm" className="h-6 px-2 text-xs" onClick={handleRefresh}>Refresh</Button>
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setRefreshConfirm(false)}>Cancel</Button>
+          </div>
+        )}
 
         <p className="text-xs text-muted-foreground">{description}</p>
 
@@ -804,7 +876,9 @@ export function NewsCategoryPanel({
             {/* Loading indicator for follow-up runs (thread already has prior results) */}
             {status === 'loading' && thread.length > 0 && (
               <div className="flex flex-col items-center py-6 gap-1.5 border border-dashed rounded-lg">
-                <p className="text-xs text-muted-foreground animate-pulse">Fetching follow-up results…</p>
+                <p className="text-xs text-muted-foreground animate-pulse">
+                  {refreshing ? 'Refreshing… the results above stay until the new ones arrive.' : 'Fetching follow-up results…'}
+                </p>
               </div>
             )}
 
