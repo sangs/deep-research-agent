@@ -115,7 +115,8 @@ backend reads the same table via asyncpg (tools/news_tools.load_sources)
 - `lib/date-utils.ts` — Centralized date/time formatting, cache-key date resolution, and browser-timezone lookup; components import from here rather than defining local `formatDate`/`formatTimestamp`/etc. helpers.
 
 ### Backend (`backend/`)
-- `main.py` — FastMCP server + Starlette app. Routes: `POST /digest` (SSE) and `Mount /mcp` (MCP streamable HTTP; effective path `/mcp/mcp`).
+- `main.py` — FastMCP server + Starlette app. Routes: `POST /digest` (SSE), `/gmail/*` (organize, owner-only via `/api/gmail`), `/ingest/status|settings|run` (owner controls via `/api/newsletter/ingest`) and `Mount /mcp` (MCP streamable HTTP; effective path `/mcp/mcp`).
+- `services/ingest.py` + `jobs/ingest.py` — Newsletter background summarizing: runs with > 40 unsummarized emails queue an `ingest_jobs` row and start the Cloud Run Job `newsletter-ingest` (`python -m jobs.ingest`); Cloud Scheduler also starts it every 30 min. Locally (no `INGEST_JOB_NAME`) the worker runs in-process. Owner pause switch: `app_settings`.
 - `services/exa_client.py` — Exa search + contents fetching, with domain allowlists, date filters and excerpt cleaning.
 - `services/openrouter.py` — `run_news_agent`: OpenRouter tool-calling loop; the LLM returns article IDs and Python assembles the digest.
 - `tools/news_tools.py` — `load_sources`/`persist_sources` (Supabase `curated_sources`) and the `@mcp.tool` functions.

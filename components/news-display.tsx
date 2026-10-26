@@ -97,6 +97,11 @@ export function useNewsStream() {
     setThread(next);
   }
 
+  function _replaceThread(entry: ThreadEntry) {
+    threadRef.current = [entry];
+    setThread([entry]);
+  }
+
   function _clearThread() {
     threadRef.current = [];
     setThread([]);
@@ -146,7 +151,7 @@ export function useNewsStream() {
     // custom date range — only used when time_range === 'custom'
     start_date?: string;
     end_date?: string;
-  }, resumes = 0) {
+  }, resumes = 0, opts: { replaceThread?: boolean } = {}) {
     // Cancel any in-flight request
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -159,7 +164,8 @@ export function useNewsStream() {
 
     // Build conversation history from existing thread so the backend can avoid
     // repeating topics already covered and search for new angles.
-    const conversation_history = threadRef.current.map(entry => ({
+    // A replacing run (Refresh) starts the thread over, so it carries no history.
+    const conversation_history = opts.replaceThread ? [] : threadRef.current.map(entry => ({
       question: entry.question,
       topics: entry.digest.topics.map(t => t.label),
     }));
@@ -226,7 +232,11 @@ export function useNewsStream() {
               } else if (event.type === 'done') {
                 if (ingestJob) continue; // no digest yet: wait for the job below
                 if (newDigest && !hadError) {
-                  _appendToThread({ question: request.question, digest: newDigest, fromCache: false });
+                  const entry = { question: request.question, digest: newDigest, fromCache: false };
+                  // Refresh: the thread is replaced only now, on success; a failed or
+                  // stopped run leaves the previous results on screen.
+                  if (opts.replaceThread) _replaceThread(entry);
+                  else _appendToThread(entry);
                 }
                 setStatus(hadError ? 'error' : 'done');
               } else if (event.type === 'error') {
@@ -246,14 +256,15 @@ export function useNewsStream() {
           }
         }
       } finally {
-        reader.cancel();
+        // After Stop the stream is already aborted and cancel() rejects; nothing to do then.
+        reader.cancel().catch(() => {});
       }
 
       if (ingestJob && !hadError) {
         const outcome = await waitForIngestJob(ingestJob.jobId, controller.signal, setIngest);
         if (!outcome) return; // stopped
         if (outcome.status === 'done' && outcome.failed < outcome.total && resumes < INGEST_MAX_RESUMES) {
-          return run(request, resumes + 1); // everything summarized: build the digest
+          return run(request, resumes + 1, opts); // everything summarized: build the digest
         }
         setErrorMsg(
           outcome.status === 'capped'
