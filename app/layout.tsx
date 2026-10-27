@@ -4,6 +4,7 @@ import { NavLinks } from "@/components/nav-links";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { LogOut } from "lucide-react";
 import { signOut } from "@/auth";
+import { sessionUser } from "@/lib/user-id";
 import { BudgetGateProvider } from "@/components/budget-gate";
 import { UsageBanner, UsageMeter } from "@/components/usage-meter";
 import { Toaster } from "@/components/ui/sonner";
@@ -32,11 +33,13 @@ export const metadata: Metadata = {
   description: "AI-powered deep research agent and news intelligence hub",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Signed-out visitors only reach public pages (/privacy); they get no app navigation.
+  const signedIn = !!(await sessionUser());
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
       <head>
@@ -63,9 +66,10 @@ export default function RootLayout({
             </div>
             <div className="flex items-center gap-2">
               <span className="hidden sm:inline text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Research Suite</span>
-              <UsageMeter />
-              <NavLinks />
+              {signedIn && <UsageMeter />}
+              {signedIn && <NavLinks />}
               <ThemeToggle />
+              {signedIn && (
               <form
                 action={async () => {
                   "use server";
@@ -81,9 +85,10 @@ export default function RootLayout({
                   <LogOut className="h-4 w-4" />
                 </button>
               </form>
+              )}
             </div>
           </nav>
-          <UsageBanner />
+          {signedIn && <UsageBanner />}
           {children}
           <Toaster position="bottom-right" />
           </BudgetGateProvider>
