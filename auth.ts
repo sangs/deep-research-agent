@@ -8,6 +8,8 @@ import { NextResponse } from 'next/server';
 import { getSecret } from '@/lib/gcp-secrets';
 import { isAllowedEmail, isPreviewDeployment } from '@/lib/auth-allowlist';
 
+const PUBLIC_PATHS = new Set(['/privacy']);
+
 export const { handlers, auth, signIn, signOut } = NextAuth(async () => {
   const [clientSecret, secret] = await Promise.all([
     getSecret('auth-google-client-secret'),
@@ -27,6 +29,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth(async () => {
       // removing an email revokes existing sessions too.
       authorized({ auth: session, request }) {
         if (isPreviewDeployment()) return true;
+        // Public: the privacy policy linked from Google's OAuth consent screen.
+        if (PUBLIC_PATHS.has(request.nextUrl.pathname)) return true;
         if (isAllowedEmail(session?.user?.email)) return true;
         if (request.nextUrl.pathname.startsWith('/api/')) {
           return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
