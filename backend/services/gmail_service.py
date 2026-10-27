@@ -48,7 +48,7 @@ import httpx
 from dotenv import load_dotenv
 
 from models.schemas import NewsDigest, TopicCluster, ArticleItem
-from tools.date_utils import resolve_date_range, format_header_date, now_iso
+from tools.date_utils import resolve_date_range, format_header_date, format_range_label, now_iso
 from tools.news_tools import load_sources
 from services.llm import chat_completion, describe_llm_error
 from services.gmail_organizer import ensure_label, add_label
@@ -114,6 +114,23 @@ def _token_path() -> Path:
 # ═══════════════════════════════════════════════════════════════════════════
 # AUTH
 # ═══════════════════════════════════════════════════════════════════════════
+
+GMAIL_TOKEN_FIX = 'run backend/scripts/refresh_gmail_token.sh'
+
+
+def describe_gmail_error(exc: Exception) -> str:
+    """Plain-language reason for a Gmail failure, with the fix when there is one.
+
+    The usual one is an expired refresh token: the OAuth app is in Google's
+    "Testing" mode, which expires refresh tokens after 7 days (doc 10).
+    """
+    text = str(exc)
+    if 'invalid_grant' in text or type(exc).__name__ == 'RefreshError':
+        return f'Gmail access has expired (the sign-in token was revoked or is older than 7 days). To fix: {GMAIL_TOKEN_FIX}.'
+    if isinstance(exc, FileNotFoundError):
+        return text
+    return f'Gmail request failed ({type(exc).__name__}: {text[:200]})'
+
 
 def get_gmail_service():
     """Return an authenticated Gmail API service object.
@@ -877,9 +894,9 @@ async def run_gmail_digest(
 
     try:
         service = await asyncio.to_thread(get_gmail_service)
-    except FileNotFoundError as e:
+    except Exception as e:
         if emit_event:
-            await emit_event({'type': 'error', 'message': str(e)})
+            await emit_event({'type': 'error', 'message': describe_gmail_error(e)})
         return empty_digest
 
     # ── Step 2: Resolve default senders from DB if none provided ────────────
@@ -899,7 +916,7 @@ async def run_gmail_digest(
 
     # ── Step 3: List the emails in the range ─────────────────────────────────
     query  = build_query(start_iso, end_iso, effective_senders, subject_kw or '')
-    date_label = f"{start_iso[:10]} → {end_iso[:10]}"
+    date_label = format_range_label(start_iso, end_iso)
 
     if emit_event:
         await emit_event({'type': 'searching', 'query': f'Gmail {date_label}'})

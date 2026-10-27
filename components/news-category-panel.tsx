@@ -12,6 +12,7 @@ import { useNewsStream } from '@/components/news-display';
 import { useBudgetGate } from '@/components/budget-gate';
 import { RunCostHint } from '@/components/run-cost-hint';
 import { GmailActivityButton, OrganizeInboxButton } from '@/components/gmail-organize';
+import { IngestHealthBanner } from '@/components/ingest-health-banner';
 import { Search, Clock, AlertCircle, Play, Square, MessageSquare, Zap, RotateCcw, RefreshCw, ChevronRight, ChevronDown, Mail, ArrowUp, Lock, Bookmark } from 'lucide-react';
 import { getCachedDigest, saveDigestToCache, buildCacheKey, buildNewsletterCacheKey } from '@/lib/history-client';
 import { toLocalDateKey, resolveTimeRangeStart, formatRelativeTime } from '@/lib/date-utils';
@@ -469,6 +470,7 @@ export function NewsCategoryPanel({
         )}
 
         <p className="text-xs text-muted-foreground">{description}</p>
+        {mode === 'newsletter' && <IngestHealthBanner />}
 
         {/* During search — query progress badges (animated, non-clickable) */}
         {status === 'loading' && searchEvents.length > 0 && (

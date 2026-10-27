@@ -31,6 +31,11 @@ from services.db import get_pool
 from services.usage import start_tracking
 from tools.date_utils import resolve_tz
 
+
+def describe_gmail_error(exc: Exception) -> str:
+    from services.gmail_service import describe_gmail_error as describe
+    return describe(exc)
+
 # Runs with at most this many unsummarized emails summarize them inline
 # (10 concurrent, about 80 s at most); larger ones go to the background job.
 INLINE_SUMMARY_LIMIT = int(os.getenv('INGEST_INLINE_LIMIT', '40'))
@@ -149,13 +154,19 @@ async def run_worker(sweep: bool) -> None:
             await _finish(job['id'], status)
         except Exception as e:
             print(f'[ingest] job {job["id"]} failed: {type(e).__name__}: {e}')
-            await _finish(job['id'], 'failed', f'{type(e).__name__}: {e}')
+            await _finish(job['id'], 'failed', describe_gmail_error(e))
 
     if sweep:
         try:
             await _sweep(service)
         except Exception as e:
+            # Recorded, so the Usage page and the Newsletter tab show it: an
+            # expired Gmail token used to fail every sweep silently for a day
+            # (test log 2026-10-27). Failed rows don't move the sweep window
+            # (it starts from the last *done* sweep), so the next good sweep
+            # catches up.
             print(f'[ingest] sweep failed: {type(e).__name__}: {e}')
+            await _record_failed_sweep(describe_gmail_error(e))
 
 
 async def _claim_next() -> dict | None:
@@ -302,8 +313,25 @@ async def _sweep(service) -> None:
         await _finish(job_id, status, f'daily cap ${DAILY_CAP_USD} reached' if status == 'capped' else None)
         await newsletter_store.purge_expired()
     except Exception as e:
-        await _finish(job_id, 'failed', f'{type(e).__name__}: {e}')
+        await _finish(job_id, 'failed', describe_gmail_error(e))
         raise
+
+
+async def _record_failed_sweep(error: str) -> None:
+    """A sweep that failed before its row existed (e.g. Gmail sign-in) gets one now."""
+    now = _now_ms()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM ingest_jobs WHERE kind = 'scheduled' AND status = 'failed' AND finished_at >= $1",
+            now - 60_000,
+        )
+        if not exists:  # the row-level handler in _sweep already recorded this one
+            await conn.execute(
+                "INSERT INTO ingest_jobs (id, kind, status, message_ids, total, error, created_at, started_at, finished_at) "
+                "VALUES ($1, 'scheduled', 'failed', '{}', 0, $2, $3, $3, $3)",
+                str(uuid.uuid4()), error, now,
+            )
 
 
 # ── Owner controls (Usage page, via /api/newsletter/ingest) ─────────────────
@@ -345,6 +373,15 @@ async def status() -> dict:
             "SELECT status, total, done_count, failed_count, cost_usd, error, started_at, finished_at "
             "FROM ingest_jobs WHERE kind = 'scheduled' ORDER BY created_at DESC LIMIT 1"
         )
+        last_ok = await conn.fetchval(
+            "SELECT max(finished_at) FROM ingest_jobs WHERE kind = 'scheduled' AND status = 'done'"
+        )
+        failing_since = None
+        if last and last['status'] == 'failed':
+            failing_since = await conn.fetchval(
+                "SELECT min(created_at) FROM ingest_jobs WHERE kind = 'scheduled' AND status = 'failed' "
+                "AND created_at > coalesce($1::bigint, 0)", last_ok,
+            )
         active = await conn.fetchval("SELECT count(*) FROM ingest_jobs WHERE status IN ('queued', 'running')")
     return {
         **(await get_settings()),
@@ -353,4 +390,6 @@ async def status() -> dict:
         'schedule': 'every 30 minutes',
         'active_jobs': active,
         'last_sweep': dict(last) if last else None,
+        'last_success_at': last_ok,
+        'failing_since': failing_since,  # set while the latest sweep failed
     }

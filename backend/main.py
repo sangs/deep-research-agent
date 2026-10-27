@@ -139,7 +139,8 @@ async def _gmail_json(handler):
     except GmailGuardError as e:
         return JSONResponse({'error': str(e)}, status_code=400)
     except Exception as e:
-        return JSONResponse({'error': f'Gmail request failed: {e}'}, status_code=502)
+        from services.gmail_service import describe_gmail_error
+        return JSONResponse({'error': describe_gmail_error(e)}, status_code=502)
 
 
 async def gmail_labels_endpoint(request: Request) -> Response:
