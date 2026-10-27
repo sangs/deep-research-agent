@@ -52,6 +52,19 @@ def resolve_date_range(
             return {'start': (today_start - timedelta(days=7)).isoformat(), 'end': now.isoformat()}
 
 
+def format_range_label(start_iso: str, end_iso: str) -> str:
+    """Human label for a resolved range: first and LAST day included.
+
+    resolve_date_range ends custom and 'yesterday' ranges at the exclusive start
+    of the next day, so end_iso[:10] would show one day too many (a custom
+    10/26–10/27 range read "2026-10-26 → 2026-10-28"). One microsecond before
+    the end is the last instant inside the range.
+    """
+    start = datetime.fromisoformat(start_iso).date()
+    last = (datetime.fromisoformat(end_iso) - timedelta(microseconds=1)).date()
+    return start.isoformat() if last <= start else f'{start.isoformat()} → {last.isoformat()}'
+
+
 def format_header_date(raw: str, tz_name: str = 'UTC') -> str:
     """Parse an RFC 2822 date header (e.g. an email Date: header) and format it
     as YYYY-MM-DD in the reader's timezone.

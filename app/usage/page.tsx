@@ -267,6 +267,8 @@ interface IngestStatus {
   spent_today_usd: number;
   schedule: string;
   active_jobs: number;
+  last_success_at: number | null;
+  failing_since: number | null; // set while the latest check failed
   last_sweep: {
     status: string;
     total: number;
@@ -342,6 +344,16 @@ function BackgroundSummarizing() {
         </Button>
       }
     >
+      {info.failing_since && last?.error && (
+        <p role="alert" className="mb-3 flex items-start gap-2 rounded-md border border-[#d03b3b]/40 bg-[#d03b3b]/10 px-3 py-2 text-sm">
+          <span aria-hidden>⛔</span>
+          <span>
+            <span className="font-medium">Checks have been failing since {new Date(info.failing_since).toLocaleString()}.</span>{' '}
+            {last.error}
+            {info.last_success_at && ` Last successful check: ${new Date(info.last_success_at).toLocaleString()}.`}
+          </span>
+        </p>
+      )}
       <p className="text-sm">
         <span className="font-medium">{info.enabled ? 'On' : 'Paused'}</span>
         <span className="text-muted-foreground">
@@ -367,7 +379,9 @@ function BackgroundSummarizing() {
             {!last
               ? 'None yet'
               : `${last.started_at ? new Date(last.started_at).toLocaleString() : '—'}: ${SWEEP_STATUS[last.status] ?? last.status}, ` +
-                `${last.total === 0 ? 'nothing new' : `${last.done_count} of ${last.total} summarized`}` +
+                (last.status === 'failed' && last.total === 0
+                  ? 'before any email was read'
+                  : `${last.total === 0 ? 'nothing new' : `${last.done_count} of ${last.total} summarized`}`) +
                 (last.failed_count ? ` (${last.failed_count} failed)` : '')}
           </dd>
           {last?.error && <p className="text-xs text-muted-foreground mt-0.5">{last.error}</p>}
