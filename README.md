@@ -77,7 +77,7 @@ npx tsc --noEmit # Type check only
 ## MCP server
 
 The backend also exposes its news tools over MCP (streamable HTTP) at **`/mcp/mcp`**: `news_search_general`, `news_search_region`,
-`news_search_curated`, `news_search_research`, `manage_sources`, `get_news_digest`.
+`news_search_curated`, `news_search_research`, `list_sources` (read-only default lists; MCP callers never see user data), `get_news_digest`.
 
 - Local: `http://localhost:8010/mcp/mcp`
 - Production (private Cloud Run): open an authenticated tunnel, then point the MCP client at the tunnel:

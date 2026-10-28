@@ -263,6 +263,7 @@ async def _record_usage(user_id, day, run_id, items) -> None:
 async def _sweep(service) -> None:
     """Summarize the configured senders' mail since the last finished sweep."""
     from services.gmail_service import SUMMARY_VERSION, build_query, list_message_ids
+    from services.users import owner_user_id
     from tools.news_tools import load_sources
 
     if not (await get_settings())['enabled']:
@@ -272,7 +273,11 @@ async def _sweep(service) -> None:
     if await _spent_today(SYSTEM_USER, day) >= DAILY_CAP_USD:
         print(f'[ingest] sweep skipped: daily cap ${DAILY_CAP_USD} reached for {day}')
         return
-    senders = (await load_sources()).get('newsletters', [])
+    owner_id = await owner_user_id()
+    if not owner_id:
+        print('[ingest] sweep skipped: no active owner')
+        return
+    senders = (await load_sources(owner_id)).get('newsletters', [])
     if not senders:
         return
 

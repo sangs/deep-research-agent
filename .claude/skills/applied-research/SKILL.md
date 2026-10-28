@@ -42,5 +42,5 @@ topic cluster. Deduplication is never performed. This preserves editorial divers
 - `news_search_general` → global news (category=news)
 - `news_search_region` → regional news (category=news + region keyword in query)
 - `news_search_curated` → curated domain list (no category filter, includes newsletters)
-- `manage_sources` → list / add / remove curated domains
+- `list_sources` → list the default curated domains (read-only; each app user edits their own lists in the app)
 - `get_news_digest` → high-level orchestrator (calls A/B/C internally)

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { sessionUser } from '@/lib/user-id';
-import { isOwnerEmail } from '@/lib/auth-allowlist';
+import { isOwner, sessionUser } from '@/lib/user-id';
 
 // GET /api/usage/providers — owner-only account view. Uses only the inference
 // key the app already holds: OpenRouter's /key endpoint reports on that key
@@ -9,7 +8,7 @@ import { isOwnerEmail } from '@/lib/auth-allowlist';
 export async function GET() {
   const user = await sessionUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!isOwnerEmail(user.email)) return NextResponse.json({ error: 'Owner only' }, { status: 403 });
+  if (!isOwner(user)) return NextResponse.json({ error: 'Owner only' }, { status: 403 });
 
   let openrouter: Record<string, unknown> | { error: string };
   try {

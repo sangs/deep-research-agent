@@ -903,7 +903,8 @@ async def run_gmail_digest(
     effective_senders = senders or []
     if not effective_senders:
         try:
-            sources = await load_sources()
+            from services.users import owner_user_id
+            sources = await load_sources(requested_by or await owner_user_id())
             effective_senders = sources.get('newsletters', [])
             if not effective_senders:
                 if emit_event:

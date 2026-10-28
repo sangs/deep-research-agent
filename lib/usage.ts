@@ -33,6 +33,8 @@ function envNumber(name: string, fallback: number): number {
 
 export const DEFAULT_DAILY_BUDGET_USD = envNumber('USAGE_DAILY_BUDGET_USD', 2);
 export const MAX_DAILY_BUDGET_USD = envNumber('USAGE_MAX_DAILY_BUDGET_USD', 5);
+/** Ceiling across all users for the current UTC day: protects the shared provider keys. */
+export const APP_DAILY_BUDGET_USD = envNumber('APP_DAILY_BUDGET_USD', 10);
 
 /** Requests per minute per user, per feature. */
 export const RATE_LIMITS: Record<Feature, number> = { deep_research: 5, news: 10, newsletter: 2 };
@@ -162,7 +164,17 @@ export async function checkRateLimit(userId: string, feature: Feature): Promise<
   return { ok: false, retryAfterSeconds: windowStart + 60 - nowSec };
 }
 
-/** Run both checks before a paid run. Returns a Response to send back when blocked, else null. */
+/** True while all users together have spent less than APP_DAILY_BUDGET_USD today (UTC). */
+async function appBudgetAvailable(): Promise<boolean> {
+  const now = Date.now();
+  const [row] = await db
+    .select({ total: sql<number>`coalesce(sum(${usageEvents.costUsd}), 0)` })
+    .from(usageEvents)
+    .where(gte(usageEvents.createdAt, now - (now % 86_400_000)));
+  return Number(row?.total ?? 0) < APP_DAILY_BUDGET_USD;
+}
+
+/** Run the checks before a paid run. Returns a Response to send back when blocked, else null. */
 export async function guardRun(userId: string, tz: string, feature: Feature): Promise<Response | null> {
   const rate = await checkRateLimit(userId, feature);
   if (!rate.ok) {
@@ -173,6 +185,7 @@ export async function guardRun(userId: string, tz: string, feature: Feature): Pr
   }
   const budget = await checkBudget(userId, tz, feature);
   if (!budget.allowed) return Response.json({ error: 'budget_exceeded', ...budget }, { status: 402 });
+  if (!(await appBudgetAvailable())) return Response.json({ error: 'app_budget_exceeded' }, { status: 503 });
   return null;
 }
 

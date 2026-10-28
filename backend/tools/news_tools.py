@@ -1,4 +1,3 @@
-import time
 from typing import Literal
 
 from services.db import get_pool
@@ -14,61 +13,26 @@ REGION_KEYWORDS: dict[str, str] = {
 }
 
 
-async def load_sources() -> dict:
+async def load_sources(user_id: str | None = None) -> dict:
+    """A user's own source lists (curated_sources). With no user — MCP callers,
+    which never get user data — the default_sources template instead."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT domain, list_type FROM curated_sources ORDER BY added_at"
-        )
+        if user_id:
+            rows = await conn.fetch(
+                "SELECT domain, list_type FROM curated_sources WHERE user_id = $1 ORDER BY added_at",
+                user_id,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT domain, list_type FROM default_sources ORDER BY list_type, domain"
+            )
     result: dict = {'news_sites': [], 'research_sites': [], 'newsletters': [], 'global_news_sites': []}
     for row in rows:
         lt = row['list_type']
         if lt in result:
             result[lt].append(row['domain'])
     return result
-
-
-async def add_sources(list_type: str, domains: list[str]) -> list[str]:
-    """Add domains to one list. Rows are unique per (domain, list_type), so the
-    same domain can sit in several lists; returns the domains actually added."""
-    pool = await get_pool()
-    added: list[str] = []
-    async with pool.acquire() as conn:
-        for domain in domains:
-            status = await conn.execute(
-                "INSERT INTO curated_sources (id, domain, list_type, added_at) "
-                "VALUES (gen_random_uuid(), $1, $2, $3) "
-                "ON CONFLICT (domain, list_type) DO NOTHING",
-                domain, list_type, int(time.time() * 1000),
-            )
-            if status.endswith(' 1'):
-                added.append(domain)
-    return added
-
-
-async def remove_sources(list_type: str, domains: list[str]) -> list[str]:
-    """Remove domains from one list only (other lists keep them); returns the
-    domains actually removed."""
-    pool = await get_pool()
-    removed: list[str] = []
-    async with pool.acquire() as conn:
-        for domain in domains:
-            status = await conn.execute(
-                "DELETE FROM curated_sources WHERE domain = $1 AND list_type = $2",
-                domain, list_type,
-            )
-            if status != 'DELETE 0':
-                removed.append(domain)
-    return removed
-
-
-def normalize_domains(domains: list[str]) -> list[str]:
-    seen: list[str] = []
-    for d in domains:
-        d = d.lower().strip()
-        if d and d not in seen:
-            seen.append(d)
-    return seen
 
 
 def register_tools(mcp) -> None:
@@ -165,39 +129,20 @@ def register_tools(mcp) -> None:
         )
 
     @mcp.tool()
-    async def manage_sources(
-        action: Literal['list', 'add', 'remove'],
-        domains: list[str] = [],
-        list_type: Literal['news_sites', 'research_sites', 'global_news_sites'] = 'news_sites',
-    ) -> dict:
+    async def list_sources() -> dict:
         """
-        Manage the news_sites, research_sites, or global_news_sites domain list.
-        action='list'   → returns current lists
-        action='add'    → adds domains to list_type only (Supabase curated_sources, one row per domain+list)
-        action='remove' → removes domains from list_type only; other lists are untouched
-        list_type: 'news_sites' (default), 'research_sites', or 'global_news_sites'
+        List the default source lists (news_sites, research_sites, newsletters,
+        global_news_sites) that the search tools use when no domains are passed.
+        Read-only: each app user edits their own lists in the app; MCP callers
+        have no user and never see or change anyone's lists.
         """
-        if action == 'list':
-            data = await load_sources()
-            return {
-                'action': 'list',
-                'news_sites': data.get('news_sites', []),
-                'research_sites': data.get('research_sites', []),
-                'newsletters': data.get('newsletters', []),
-                'global_news_sites': data.get('global_news_sites', []),
-            }
-
-        elif action == 'add':
-            added = await add_sources(list_type, normalize_domains(domains))
-            total = len((await load_sources()).get(list_type, []))
-            return {'action': 'add', 'list_type': list_type, 'added': added, 'total': total}
-
-        elif action == 'remove':
-            removed = await remove_sources(list_type, normalize_domains(domains))
-            total = len((await load_sources()).get(list_type, []))
-            return {'action': 'remove', 'list_type': list_type, 'removed': removed, 'total': total}
-
-        return {'error': f'Unknown action: {action}'}
+        data = await load_sources()
+        return {
+            'news_sites': data.get('news_sites', []),
+            'research_sites': data.get('research_sites', []),
+            'newsletters': data.get('newsletters', []),
+            'global_news_sites': data.get('global_news_sites', []),
+        }
 
     @mcp.tool()
     async def get_news_digest(

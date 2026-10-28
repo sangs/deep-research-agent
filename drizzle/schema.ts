@@ -1,8 +1,62 @@
 import { pgTable, text, bigint, boolean, integer, doublePrecision, jsonb, uniqueIndex, index, primaryKey } from 'drizzle-orm/pg-core';
 
+// ── Identity & access (lib/users.ts; design: architecture/features/14-per-user-data-isolation-design-2026-10-27.md) ──
+// Every user's data is private to them. Access is owner-approved: an unknown
+// Google account that signs in becomes a 'pending' row until the owner approves it.
+export const users = pgTable('users', {
+  id: text('id').primaryKey(), // UUID; the owner keeps the pre-multi-user fixed id
+  email: text('email').notNull(), // lower-cased
+  name: text('name'),
+  role: text('role').notNull().default('member'), // 'owner' | 'member' | 'system' (newsletter sweeps' cost account; never signs in)
+  status: text('status').notNull().default('pending'), // 'pending' | 'active' | 'suspended'
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(), // epoch ms
+  approvedAt: bigint('approved_at', { mode: 'number' }),
+  approvedBy: text('approved_by'), // user id of the owner who approved
+  lastLoginAt: bigint('last_login_at', { mode: 'number' }),
+}, (table) => [
+  uniqueIndex('users_email_unique').on(table.email),
+  index('users_status_created_idx').on(table.status, table.createdAt),
+]);
+
+// One row per linked sign-in account. Keyed by Google's `sub`, which never
+// changes or gets reassigned (emails can).
+export const userIdentities = pgTable('user_identities', {
+  provider: text('provider').notNull(), // 'google'
+  subject: text('subject').notNull(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  emailAtLink: text('email_at_link'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.provider, table.subject] }),
+  index('user_identities_user_idx').on(table.userId),
+]);
+
+// Append-only record of sign-ins and access changes. Not FK'd to users so the
+// trail outlives a deleted account.
+export const auditLog = pgTable('audit_log', {
+  id: text('id').primaryKey(),
+  actorUserId: text('actor_user_id'), // null for system actions
+  action: text('action').notNull(), // 'sign_in' | 'access_requested' | 'access_approved' | …
+  targetUserId: text('target_user_id'),
+  metadata: jsonb('metadata').notNull().default({}),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+}, (table) => [
+  index('audit_log_created_idx').on(table.createdAt),
+  index('audit_log_target_created_idx').on(table.targetUserId, table.createdAt),
+]);
+
+// Template copied into a user's own curated_sources when they become active.
+// Also what MCP callers (no user) search with.
+export const defaultSources = pgTable('default_sources', {
+  domain: text('domain').notNull(),
+  listType: text('list_type').notNull(),
+}, (table) => [primaryKey({ columns: [table.domain, table.listType] })]);
+
+const ownerUserId = () => text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' });
+
 export const researchSessions = pgTable('research_sessions', {
   id: text('id').primaryKey(),
-  userId: text('user_id').notNull(),
+  userId: ownerUserId(),
   title: text('title').notNull(),
   messages: text('messages').notNull(), // JSON-serialised UIMessage[]
   createdAt: bigint('created_at', { mode: 'number' }).notNull(),
@@ -11,7 +65,7 @@ export const researchSessions = pgTable('research_sessions', {
 
 export const newsDigests = pgTable('news_digests', {
   id: text('id').primaryKey(),
-  userId: text('user_id').notNull(),
+  userId: ownerUserId(),
   // NOT globally unique — cache_key alone previously let two different
   // userIds computing the same key (e.g. both on default filters) silently
   // overwrite each other's row via onConflictDoUpdate. Uniqueness is now
@@ -32,12 +86,16 @@ export const newsDigests = pgTable('news_digests', {
   index('news_digests_user_mode_generated_idx').on(table.userId, table.mode, table.generatedAt),
 ]);
 
+// Each user's own source lists, seeded from default_sources on activation.
 export const curatedSources = pgTable('curated_sources', {
   id: text('id').primaryKey(),
+  // Default = the owner's id only so pre-multi-user code still inserting without
+  // user_id lands on the owner during the deploy switch-over; dropped in Phase B.
+  userId: ownerUserId().default('32087c9e-d37e-4b7c-896e-58da85f4d108'),
   domain: text('domain').notNull(),
-  listType: text('list_type').notNull(), // 'news_sites' | 'research_sites' | 'newsletters'
+  listType: text('list_type').notNull(), // 'news_sites' | 'research_sites' | 'newsletters' | 'global_news_sites'
   addedAt: bigint('added_at', { mode: 'number' }).notNull(),
-});
+}, (table) => [uniqueIndex('curated_sources_user_domain_list_unique').on(table.userId, table.domain, table.listType)]);
 
 // ── Usage limits (lib/usage.ts) ─────────────────────────────────────────────
 // One row per (run, provider, model): actual cost reported by the provider
@@ -45,7 +103,7 @@ export const curatedSources = pgTable('curated_sources', {
 // day at record time — the unit the daily budget is enforced on.
 export const usageEvents = pgTable('usage_events', {
   id: text('id').primaryKey(),
-  userId: text('user_id').notNull(),
+  userId: ownerUserId(),
   day: text('day').notNull(), // YYYY-MM-DD in the user's timezone
   feature: text('feature').notNull(), // 'deep_research' | 'news' | 'newsletter'
   provider: text('provider').notNull(), // 'openrouter' | 'exa'
@@ -56,13 +114,14 @@ export const usageEvents = pgTable('usage_events', {
 }, (table) => [
   index('usage_events_user_day_idx').on(table.userId, table.day),
   index('usage_events_user_feature_created_idx').on(table.userId, table.feature, table.createdAt),
+  index('usage_events_created_idx').on(table.createdAt), // app-wide daily cap, owner console spend
 ]);
 
 // Audit trail of consented daily-budget raises. The latest row for (user, day)
 // is that day's limit; with no row the default applies. Raises expire with the day.
 export const budgetRaises = pgTable('budget_raises', {
   id: text('id').primaryKey(),
-  userId: text('user_id').notNull(),
+  userId: ownerUserId(),
   day: text('day').notNull(),
   limitUsd: doublePrecision('limit_usd').notNull(),
   previousLimitUsd: doublePrecision('previous_limit_usd').notNull(),
@@ -72,7 +131,7 @@ export const budgetRaises = pgTable('budget_raises', {
 
 // Fixed-window request counters shared by all server instances.
 export const rateLimitCounters = pgTable('rate_limit_counters', {
-  userId: text('user_id').notNull(),
+  userId: ownerUserId(),
   bucket: text('bucket').notNull(),
   windowStart: bigint('window_start', { mode: 'number' }).notNull(), // epoch seconds
   count: integer('count').notNull(),

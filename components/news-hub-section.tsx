@@ -8,12 +8,15 @@ import { SourceManager } from '@/components/source-manager';
 import { GmailOrganizeProvider } from '@/components/gmail-organize';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { useAccount } from '@/context/account-context';
 
 
 type TabStatus = { status: string; count: number };
 type TabId = 'global' | 'regional' | 'curated' | 'research' | 'newsletter';
 
 export function NewsHubSection() {
+  // Newsletter reads the owner's Gmail until each user connects their own (design 14, Phase C).
+  const { isOwner: showNewsletter } = useAccount();
   const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
   const [tabStatus, setTabStatus] = useState<Record<TabId, TabStatus>>({
     global: { status: 'idle', count: 0 },
@@ -86,7 +89,7 @@ export function NewsHubSection() {
 
         {/* Tabbed panels */}
         <Tabs defaultValue="global" className="w-full">
-          <TabsList className="grid w-full grid-cols-5 h-11">
+          <TabsList className={`grid w-full h-11 ${showNewsletter ? 'grid-cols-5' : 'grid-cols-4'}`}>
             <TabsTrigger value="global" className="text-sm font-medium flex items-center gap-0">
               🌍 Global<TabBadge tabId="global" />
             </TabsTrigger>
@@ -99,9 +102,11 @@ export function NewsHubSection() {
             <TabsTrigger value="research" className="text-sm font-medium flex items-center gap-0">
               🔬 Research<TabBadge tabId="research" />
             </TabsTrigger>
-            <TabsTrigger value="newsletter" className="text-sm font-medium flex items-center gap-0">
-              📬 Newsletter<TabBadge tabId="newsletter" />
-            </TabsTrigger>
+            {showNewsletter && (
+              <TabsTrigger value="newsletter" className="text-sm font-medium flex items-center gap-0">
+                📬 Newsletter<TabBadge tabId="newsletter" />
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="global" forceMount className="mt-0 border border-t-0 rounded-b-lg min-h-[580px] flex flex-col data-[state=inactive]:hidden">
@@ -146,18 +151,20 @@ export function NewsHubSection() {
             />
           </TabsContent>
 
-          <TabsContent value="newsletter" forceMount className="mt-0 border border-t-0 rounded-b-lg min-h-[580px] flex flex-col data-[state=inactive]:hidden">
-            <GmailOrganizeProvider>
-              <NewsCategoryPanel
-                icon="📬"
-                title="Newsletter Subscriptions"
-                description="Pull and summarize newsletter emails from your Gmail inbox"
-                mode="newsletter"
-                onStatusChange={handleNewsletterStatus}
-                onManageSources={() => setSourceManagerOpen(true)}
-              />
-            </GmailOrganizeProvider>
-          </TabsContent>
+          {showNewsletter && (
+            <TabsContent value="newsletter" forceMount className="mt-0 border border-t-0 rounded-b-lg min-h-[580px] flex flex-col data-[state=inactive]:hidden">
+              <GmailOrganizeProvider>
+                <NewsCategoryPanel
+                  icon="📬"
+                  title="Newsletter Subscriptions"
+                  description="Pull and summarize newsletter emails from your Gmail inbox"
+                  mode="newsletter"
+                  onStatusChange={handleNewsletterStatus}
+                  onManageSources={() => setSourceManagerOpen(true)}
+                />
+              </GmailOrganizeProvider>
+            </TabsContent>
+          )}
         </Tabs>
       </div>
 

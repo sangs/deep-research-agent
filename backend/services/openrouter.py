@@ -105,15 +105,16 @@ TOOL_SCHEMAS = [
 ]
 
 
-async def _fetch_articles(name: str, args: dict, custom_domains: list[str] | None) -> list[dict]:
-    """Raw article fetch — returns list of article dicts from Exa."""
+async def _fetch_articles(name: str, args: dict, custom_domains: list[str] | None, sources: dict) -> list[dict]:
+    """Raw article fetch — returns list of article dicts from Exa. `sources`: the
+    requesting user's lists (tools.news_tools.load_sources)."""
     if name == 'news_search_general':
         return await search_news(
             query=args['query'],
             num_results=args.get('num_results', 8),
             start_date=args['start_date'],
             end_date=args['end_date'],
-            include_domains=(await load_sources()).get('global_news_sites', []),
+            include_domains=sources.get('global_news_sites', []),
             category='news',
         )
     elif name == 'news_search_region':
@@ -124,11 +125,11 @@ async def _fetch_articles(name: str, args: dict, custom_domains: list[str] | Non
             num_results=args.get('num_results', 8),
             start_date=args['start_date'],
             end_date=args['end_date'],
-            include_domains=(await load_sources()).get('global_news_sites', []),
+            include_domains=sources.get('global_news_sites', []),
             category='news',
         )
     elif name == 'news_search_curated':
-        active_domains = args.get('domains') or custom_domains or (await load_sources()).get('news_sites', [])
+        active_domains = args.get('domains') or custom_domains or sources.get('news_sites', [])
         return await search_news(
             query=args['query'],
             num_results=args.get('num_results', 8),
@@ -138,7 +139,7 @@ async def _fetch_articles(name: str, args: dict, custom_domains: list[str] | Non
             category='news',
         )
     elif name == 'news_search_research':
-        active_domains = args.get('domains') or custom_domains or (await load_sources()).get('research_sites', [])
+        active_domains = args.get('domains') or custom_domains or sources.get('research_sites', [])
         return await search_news(
             query=args['query'],
             num_results=args.get('num_results', 8),
@@ -152,13 +153,14 @@ async def _dispatch_tool(
     args: dict,
     custom_domains: list[str] | None,
     article_pool: dict[int, dict],
+    sources: dict,
 ) -> dict:
     """Fetch articles, add to the shared pool, return compact summary for the LLM.
 
     The summary contains article IDs and metadata (title/source/excerpt) but
     NO URLs, so the LLM cannot reproduce or hallucinate URLs in its final JSON.
     """
-    articles = await _fetch_articles(name, args, custom_domains)
+    articles = await _fetch_articles(name, args, custom_domains, sources)
 
     added_ids: list[int] = []
     seen_urls = {a['url'] for a in article_pool.values() if a.get('url')}
@@ -402,8 +404,11 @@ async def run_news_agent(
     question: str | None = None,
     conversation_history: list[dict] | None = None,
     tz_name: str = 'UTC',
+    user_id: str | None = None,
 ) -> NewsDigest:
+    """user_id: whose source lists to search; None (MCP callers) uses the defaults."""
     dates = resolve_date_range(time_range, tz_name)
+    sources = await load_sources(user_id)
     system = _build_system_prompt(mode, time_range, region, dates, question, conversation_history)
 
     mode_tool_name = _MODE_TOOL.get(mode)
@@ -479,7 +484,7 @@ async def run_news_agent(
                         await emit_event({'type': 'searching', 'query': args.get('query', fn_name)})
 
                     try:
-                        result = await _dispatch_tool(fn_name, args, custom_domains, article_pool)
+                        result = await _dispatch_tool(fn_name, args, custom_domains, article_pool, sources)
                     except Exception as e:
                         result = {'article_ids': [], 'articles': []}
                         if emit_event:

@@ -1,32 +1,37 @@
-// Server-side user identity for /api/history/* routes, derived from the signed-in
-// session — never from a client-supplied header (the old X-User-Id header and
-// this fixed UUID were both public).
-//
-// The app is single-tenant today (one shared Gmail account): every allowlisted
-// user maps to the same fixed identity that all existing saved digests and
-// research sessions are stored under (consolidated 2026-08-28). Real per-user
-// ids replace this when multi-user support lands — see
-// documents/multi_user_auth_payments_roadmap.md ("claim your existing data").
+// Server-side user identity, derived from the signed-in session — never from a
+// client-supplied value. Each user's data is private to them: every personal
+// query filters on this id (design 14, documents/architecture/features).
 
 import { auth } from '@/auth';
-import { isAllowedEmail, isPreviewDeployment } from './auth-allowlist';
-
-const FIXED_USER_ID = '32087c9e-d37e-4b7c-896e-58da85f4d108';
+import { isPreviewDeployment } from './auth-allowlist';
+import { getUserAccess, OWNER_LEGACY_USER_ID, type Role, type UserAccess } from './users';
 
 export interface SessionUser {
   id: string;
   email: string;
+  role: Role;
 }
 
-/** The signed-in allowlisted user, or null. */
-export async function sessionUser(): Promise<SessionUser | null> {
-  if (isPreviewDeployment()) return { id: FIXED_USER_ID, email: 'preview-deployment' }; // Vercel Authentication gates previews
+/** The signed-in user's account in any status (for /access), or null. */
+export async function sessionAccess(): Promise<UserAccess | null> {
   const session = await auth();
-  const email = session?.user?.email;
-  return email && isAllowedEmail(email) ? { id: FIXED_USER_ID, email } : null;
+  const uid = session?.user?.id;
+  return uid ? getUserAccess(uid) : null;
 }
 
-/** The signed-in user's id, or null when there is no allowlisted session. */
+/** The signed-in **active** user, or null. Pending and suspended users get null. */
+export async function sessionUser(): Promise<SessionUser | null> {
+  // Previews (Vercel Authentication-gated, no Google sign-in) act as the owner.
+  if (isPreviewDeployment()) return { id: OWNER_LEGACY_USER_ID, email: 'preview-deployment', role: 'owner' };
+  const access = await sessionAccess();
+  return access?.status === 'active' ? { id: access.id, email: access.email, role: access.role } : null;
+}
+
+/** The signed-in active user's id, or null. */
 export async function sessionUserId(): Promise<string | null> {
   return (await sessionUser())?.id ?? null;
+}
+
+export function isOwner(user: SessionUser | null): boolean {
+  return user?.role === 'owner';
 }
