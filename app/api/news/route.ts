@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { BACKEND_URL, backendAuthHeaders } from '@/lib/backend-auth';
 import { isOwner, sessionUser } from '@/lib/user-id';
 import { guardRun, recordUsage, type UsageItem } from '@/lib/usage';
+import { userAssertionHeaders } from '@/lib/user-assertion';
 
 // Large newsletter digests (month range, many senders) can take minutes to
 // fetch/cluster/summarize — the backend now streams progress incrementally
@@ -83,7 +84,7 @@ export async function POST(req: Request): Promise<Response> {
 
   let authHeaders: Record<string, string>;
   try {
-    authHeaders = await backendAuthHeaders(req, BACKEND_URL);
+    authHeaders = { ...(await backendAuthHeaders(req, BACKEND_URL)), ...(await userAssertionHeaders(user)) };
   } catch (e) {
     console.error('[api/news] backend auth failed:', e);
     return sseError('Could not authenticate to the news backend.');
@@ -92,9 +93,9 @@ export async function POST(req: Request): Promise<Response> {
   const upstream = await fetch(`${BACKEND_URL}/digest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
-    // user_id (from the session, overriding anything the client sent): whose
-    // source lists to search, and who is charged for a newsletter background job.
-    body: JSON.stringify({ ...body, user_id: userId }),
+    // Whose source lists to search and who is charged for a newsletter background
+    // job come only from the signed assertion; a client-sent user_id is dropped.
+    body: JSON.stringify({ ...body, user_id: undefined }),
     signal: req.signal,
   });
   if (!upstream.ok || !upstream.body) {

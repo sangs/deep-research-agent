@@ -1,0 +1,1 @@
+ALTER TABLE "curated_sources" ALTER COLUMN "user_id" DROP DEFAULT;

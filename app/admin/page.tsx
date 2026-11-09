@@ -25,7 +25,7 @@ interface AdminUser {
   spent30dUsd: number;
 }
 
-type Action = 'approve' | 'reject' | 'suspend' | 'reactivate';
+type Action = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete';
 
 const STATUS_STYLE: Record<AdminUser['status'], string> = {
   pending: 'bg-[#fab219]/15 text-foreground border-[#fab219]/40',
@@ -51,6 +51,7 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [email, setEmail] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch('/api/admin/users', { cache: 'no-store' });
@@ -197,6 +198,25 @@ export default function AdminPage() {
                     <td className="py-2.5 pr-3 text-right tabular-nums">{formatUsd(u.spentTodayUsd)}</td>
                     <td className="py-2.5 pr-3 text-right tabular-nums">{formatUsd(u.spent30dUsd)}</td>
                     <td className="py-2.5 text-right">
+                      {u.role === 'member' && confirmDelete === u.id ? (
+                        <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                          <span className="text-xs">Delete this account and all its data?</span>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={async () => {
+                              if (await act(u, 'delete')) setConfirmDelete(null);
+                            }}
+                            disabled={!!busy}
+                          >
+                            Delete
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(null)} disabled={!!busy}>
+                            Cancel
+                          </Button>
+                        </span>
+                      ) : (
+                      <span className="inline-flex gap-2 justify-end">
                       {u.role === 'member' && u.status === 'active' && (
                         <Button size="sm" variant="outline" onClick={() => act(u, 'suspend')} disabled={!!busy}>
                           Suspend
@@ -206,6 +226,13 @@ export default function AdminPage() {
                         <Button size="sm" variant="outline" onClick={() => act(u, 'reactivate')} disabled={!!busy}>
                           Reactivate
                         </Button>
+                      )}
+                      {u.role === 'member' && (
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(u.id)} disabled={!!busy}>
+                          Delete
+                        </Button>
+                      )}
+                      </span>
                       )}
                     </td>
                   </tr>

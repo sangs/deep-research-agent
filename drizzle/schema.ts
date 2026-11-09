@@ -89,9 +89,7 @@ export const newsDigests = pgTable('news_digests', {
 // Each user's own source lists, seeded from default_sources on activation.
 export const curatedSources = pgTable('curated_sources', {
   id: text('id').primaryKey(),
-  // Default = the owner's id only so pre-multi-user code still inserting without
-  // user_id lands on the owner during the deploy switch-over; dropped in Phase B.
-  userId: ownerUserId().default('32087c9e-d37e-4b7c-896e-58da85f4d108'),
+  userId: ownerUserId(),
   domain: text('domain').notNull(),
   listType: text('list_type').notNull(), // 'news_sites' | 'research_sites' | 'newsletters' | 'global_news_sites'
   addedAt: bigint('added_at', { mode: 'number' }).notNull(),

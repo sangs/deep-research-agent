@@ -4,7 +4,7 @@ import { applyOwnerAction, listUsersForOwner, preapproveEmail, type OwnerAction 
 
 // Owner console API. Account + cost only: nothing here reads any user's
 // research, digests, sources or email.
-const ACTIONS = new Set<OwnerAction>(['approve', 'reject', 'suspend', 'reactivate']);
+const ACTIONS = new Set<OwnerAction>(['approve', 'reject', 'suspend', 'reactivate', 'delete']);
 
 async function owner() {
   const user = await sessionUser();
@@ -17,7 +17,7 @@ export async function GET() {
   return NextResponse.json({ users: await listUsersForOwner() });
 }
 
-// POST /api/admin/users { action: 'approve'|'reject'|'suspend'|'reactivate', userId }
+// POST /api/admin/users { action: 'approve'|'reject'|'suspend'|'reactivate'|'delete', userId }
 //                     | { action: 'preapprove', email }
 export async function POST(req: Request) {
   const user = await owner();

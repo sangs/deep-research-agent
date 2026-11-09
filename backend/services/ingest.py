@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 import httpx
 
 from services import newsletter_store
-from services.db import get_pool
+from services.db import worker_conn
 from services.usage import start_tracking
 from tools.date_utils import resolve_tz
 
@@ -82,8 +82,7 @@ async def request_job(message_ids: list[str], requested_by: str, tz_name: str) -
     (one at a time; emails it doesn't cover are queued by the re-run after it).
     Returns {id, status, total, done_count, failed_count}.
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         await _expire_stale(conn)
         active = await conn.fetchrow(
             "SELECT id, status, total, done_count, failed_count FROM ingest_jobs "
@@ -139,9 +138,9 @@ async def run_worker(sweep: bool) -> None:
     """Process every queued on_demand job, then (if `sweep`) summarize new mail."""
     from services.gmail_service import get_gmail_service
 
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         await _expire_stale(conn)
+    await purge_audit_log()
 
     service = None
     while (job := await _claim_next()) is not None:
@@ -170,8 +169,7 @@ async def run_worker(sweep: bool) -> None:
 
 
 async def _claim_next() -> dict | None:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         row = await conn.fetchrow(
             "UPDATE ingest_jobs SET status = 'running', started_at = $1 WHERE id = ("
             "  SELECT id FROM ingest_jobs WHERE kind = 'on_demand' AND status = 'queued' "
@@ -183,8 +181,7 @@ async def _claim_next() -> dict | None:
 
 
 async def _finish(job_id: str, status: str, error: str | None = None) -> None:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         await conn.execute(
             'UPDATE ingest_jobs SET status = $2, error = $3, finished_at = $4 WHERE id = $1',
             job_id, status, error, _now_ms(),
@@ -192,8 +189,7 @@ async def _finish(job_id: str, status: str, error: str | None = None) -> None:
 
 
 async def _spent_today(user_id: str, day: str) -> float:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         return float(await conn.fetchval(
             'SELECT coalesce(sum(cost_usd), 0) FROM usage_events WHERE user_id = $1 AND day = $2',
             user_id, day,
@@ -241,8 +237,7 @@ async def _summarize_ids(job_id, ids, service, charge_to, day, cap_reached) -> s
 
 
 async def _progress(job_id, total, done, failed, cost) -> None:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         await conn.execute(
             'UPDATE ingest_jobs SET total = $2, done_count = $3, failed_count = $4, cost_usd = $5 WHERE id = $1',
             job_id, total, done, failed, cost,
@@ -250,8 +245,7 @@ async def _progress(job_id, total, done, failed, cost) -> None:
 
 
 async def _record_usage(user_id, day, run_id, items) -> None:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         await conn.executemany(
             'INSERT INTO usage_events (id, user_id, day, feature, provider, model, cost_usd, run_id, created_at) '
             "VALUES ($1, $2, $3, 'newsletter', $4, $5, $6, $7, $8)",
@@ -281,8 +275,7 @@ async def _sweep(service) -> None:
     if not senders:
         return
 
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         last = await conn.fetchval(
             "SELECT max(started_at) FROM ingest_jobs WHERE kind = 'scheduled' AND status = 'done'"
         )
@@ -303,7 +296,7 @@ async def _sweep(service) -> None:
 
     job_id = str(uuid.uuid4())
     started = int(now * 1000)  # the next sweep starts from here (minus the overlap)
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         await conn.execute(
             "INSERT INTO ingest_jobs (id, kind, status, message_ids, total, created_at, started_at) "
             "VALUES ($1, 'scheduled', 'running', $2, $3, $4, $4)",
@@ -322,11 +315,25 @@ async def _sweep(service) -> None:
         raise
 
 
+AUDIT_RETENTION_DAYS = 365
+
+
+async def purge_audit_log() -> None:
+    """Delete audit_log rows older than a year (design 14 §8). Indexed on created_at."""
+    try:
+        async with worker_conn('retention') as conn:
+            await conn.execute(
+                'DELETE FROM audit_log WHERE created_at < $1',
+                _now_ms() - AUDIT_RETENTION_DAYS * 86400 * 1000,
+            )
+    except Exception as e:  # never let retention stop the newsletter work
+        print(f'[retention] audit_log purge failed: {type(e).__name__}: {e}')
+
+
 async def _record_failed_sweep(error: str) -> None:
     """A sweep that failed before its row existed (e.g. Gmail sign-in) gets one now."""
     now = _now_ms()
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         exists = await conn.fetchval(
             "SELECT 1 FROM ingest_jobs WHERE kind = 'scheduled' AND status = 'failed' AND finished_at >= $1",
             now - 60_000,
@@ -343,8 +350,7 @@ async def _record_failed_sweep(error: str) -> None:
 
 async def get_settings() -> dict:
     """{enabled, updated_by, updated_at}; no row means enabled."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         row = await conn.fetchrow(
             'SELECT value, updated_by, updated_at FROM app_settings WHERE key = $1', SETTINGS_KEY,
         )
@@ -357,8 +363,7 @@ async def get_settings() -> dict:
 
 
 async def set_enabled(enabled: bool, actor: str) -> dict:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         await conn.execute(
             'INSERT INTO app_settings (key, value, updated_by, updated_at) VALUES ($1, $2::jsonb, $3, $4) '
             'ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, '
@@ -371,8 +376,7 @@ async def set_enabled(enabled: bool, actor: str) -> dict:
 
 async def status() -> dict:
     """Switch state, today's sweep spend against the cap, and the latest sweep."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         await _expire_stale(conn)
         last = await conn.fetchrow(
             "SELECT status, total, done_count, failed_count, cost_usd, error, started_at, finished_at "

@@ -8,7 +8,7 @@
 
 import { randomUUID } from 'crypto';
 import { and, desc, eq, gte, isNull, sql } from 'drizzle-orm';
-import { db } from '@/drizzle/db';
+import { withUser, withWorker, type Tx } from '@/lib/db-access';
 import { auditLog, curatedSources, defaultSources, userIdentities, users, usageEvents } from '@/drizzle/schema';
 import { isLegacyAllowedEmail, isOwnerBootstrapEmail } from '@/lib/auth-allowlist';
 
@@ -32,8 +32,7 @@ export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-type Executor = typeof db | Tx;
+type Executor = Tx;
 
 export type AuditAction =
   | 'sign_in'
@@ -43,7 +42,8 @@ export type AuditAction =
   | 'access_preapproved'
   | 'access_request_rejected'
   | 'access_suspended'
-  | 'access_reactivated';
+  | 'access_reactivated'
+  | 'account_deleted';
 
 export async function audit(
   ex: Executor,
@@ -85,11 +85,14 @@ function forgetAccess(userId: string) {
 export async function getUserAccess(userId: string): Promise<UserAccess | null> {
   const hit = accessCache.get(userId);
   if (hit && hit.expires > Date.now()) return hit.value;
-  const [row] = await db
-    .select({ id: users.id, email: users.email, name: users.name, role: users.role, status: users.status })
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
+  // As the user themselves: row security returns their own row only.
+  const [row] = await withUser(userId, (tx) =>
+    tx
+      .select({ id: users.id, email: users.email, name: users.name, role: users.role, status: users.status })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1),
+  );
   const value = row ? { ...row, role: row.role as Role, status: row.status as AccessStatus } : null;
   accessCache.set(userId, { value, expires: Date.now() + ACCESS_CACHE_MS });
   return value;
@@ -97,11 +100,13 @@ export async function getUserAccess(userId: string): Promise<UserAccess | null> 
 
 /** Internal user id linked to a Google account, or null. */
 export async function userIdForGoogleSubject(subject: string): Promise<string | null> {
-  const [row] = await db
-    .select({ userId: userIdentities.userId })
-    .from(userIdentities)
-    .where(and(eq(userIdentities.provider, PROVIDER), eq(userIdentities.subject, subject)))
-    .limit(1);
+  const [row] = await withWorker('sign_in', (tx) =>
+    tx
+      .select({ userId: userIdentities.userId })
+      .from(userIdentities)
+      .where(and(eq(userIdentities.provider, PROVIDER), eq(userIdentities.subject, subject)))
+      .limit(1),
+  );
   return row?.userId ?? null;
 }
 
@@ -115,7 +120,7 @@ export async function resolveSignIn(subject: string, rawEmail: string, name: str
   const email = normalizeEmail(rawEmail);
   const now = Date.now();
 
-  return db.transaction(async (tx) => {
+  return withWorker('sign_in', async (tx) => {
     // 1. Known Google account.
     const [linked] = await tx
       .select({ userId: userIdentities.userId })
@@ -205,45 +210,47 @@ export interface AdminUserRow {
 export async function listUsersForOwner(): Promise<AdminUserRow[]> {
   const now = Date.now();
   const startOfUtcDay = now - (now % 86_400_000);
-  const rows = await db
-    .select({
-      id: users.id,
-      email: users.email,
-      name: users.name,
-      role: users.role,
-      status: users.status,
-      createdAt: users.createdAt,
-      lastLoginAt: users.lastLoginAt,
-      linked: sql<boolean>`exists (select 1 from ${userIdentities} where ${userIdentities.userId} = ${users.id})`,
-    })
-    .from(users)
-    .orderBy(desc(users.createdAt));
-  const spend = await db
-    .select({
-      userId: usageEvents.userId,
-      today: sql<number>`coalesce(sum(${usageEvents.costUsd}) filter (where ${usageEvents.createdAt} >= ${startOfUtcDay}), 0)`,
-      last30: sql<number>`coalesce(sum(${usageEvents.costUsd}), 0)`,
-    })
-    .from(usageEvents)
-    .where(gte(usageEvents.createdAt, now - 30 * 86_400_000))
-    .groupBy(usageEvents.userId);
-  const byUser = new Map(spend.map((s) => [s.userId, s]));
-  return rows.map((r) => ({
-    ...r,
-    role: r.role as Role,
-    status: r.status as AccessStatus,
-    spentTodayUsd: Number(byUser.get(r.id)?.today ?? 0),
-    spent30dUsd: Number(byUser.get(r.id)?.last30 ?? 0),
-  }));
+  return withWorker('owner_console', async (tx) => {
+    const rows = await tx
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        role: users.role,
+        status: users.status,
+        createdAt: users.createdAt,
+        lastLoginAt: users.lastLoginAt,
+        linked: sql<boolean>`exists (select 1 from ${userIdentities} where ${userIdentities.userId} = ${users.id})`,
+      })
+      .from(users)
+      .orderBy(desc(users.createdAt));
+    const spend = await tx
+      .select({
+        userId: usageEvents.userId,
+        today: sql<number>`coalesce(sum(${usageEvents.costUsd}) filter (where ${usageEvents.createdAt} >= ${startOfUtcDay}), 0)`,
+        last30: sql<number>`coalesce(sum(${usageEvents.costUsd}), 0)`,
+      })
+      .from(usageEvents)
+      .where(gte(usageEvents.createdAt, now - 30 * 86_400_000))
+      .groupBy(usageEvents.userId);
+    const byUser = new Map(spend.map((s) => [s.userId, s]));
+    return rows.map((r) => ({
+      ...r,
+      role: r.role as Role,
+      status: r.status as AccessStatus,
+      spentTodayUsd: Number(byUser.get(r.id)?.today ?? 0),
+      spent30dUsd: Number(byUser.get(r.id)?.last30 ?? 0),
+    }));
+  });
 }
 
-export type OwnerAction = 'approve' | 'reject' | 'suspend' | 'reactivate';
+export type OwnerAction = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete';
 
 /** Apply an owner action to a member. Returns an error message, or null on success. */
 export async function applyOwnerAction(ownerId: string, targetId: string, action: OwnerAction): Promise<string | null> {
   if (targetId === ownerId) return 'You cannot change your own access';
   const now = Date.now();
-  const result = await db.transaction(async (tx) => {
+  const result = await withWorker('owner_console', async (tx) => {
     const [target] = await tx
       .select({ status: users.status, role: users.role })
       .from(users)
@@ -270,6 +277,12 @@ export async function applyOwnerAction(ownerId: string, targetId: string, action
       await audit(tx, 'access_suspended', ownerId, targetId);
       return null;
     }
+    if (action === 'delete') {
+      // Removes the account and, through ON DELETE CASCADE, all of its data.
+      await tx.delete(users).where(eq(users.id, targetId));
+      await audit(tx, 'account_deleted', ownerId, targetId, { by: 'owner', previousStatus: from });
+      return null;
+    }
     if (action === 'reactivate' && from === 'suspended') {
       await tx.update(users).set({ status: 'active' }).where(eq(users.id, targetId));
       await seedSources(tx, targetId); // no-op unless they never had sources (e.g. legacy placeholder)
@@ -287,7 +300,7 @@ export async function preapproveEmail(ownerId: string, rawEmail: string): Promis
   const email = normalizeEmail(rawEmail);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Enter a valid email address';
   const now = Date.now();
-  return db.transaction(async (tx) => {
+  return withWorker('owner_console', async (tx) => {
     const [existing] = await tx
       .select({ id: users.id, status: users.status })
       .from(users)
@@ -316,4 +329,20 @@ export async function preapproveEmail(ownerId: string, rawEmail: string): Promis
     await audit(tx, 'access_preapproved', ownerId, userId, { email });
     return null;
   });
+}
+
+/** A member deletes their own account: the user row and, through ON DELETE
+ *  CASCADE, every personal row (research, digests, sources, usage). The owner
+ *  account can't be deleted this way. Returns an error message, or null. */
+export async function deleteOwnAccount(userId: string): Promise<string | null> {
+  const result = await withWorker('account_delete', async (tx) => {
+    const [me] = await tx.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
+    if (!me) return 'Account not found';
+    if (me.role !== 'member') return 'The owner account cannot be deleted here';
+    await tx.delete(users).where(eq(users.id, userId));
+    await audit(tx, 'account_deleted', userId, userId, { by: 'self' });
+    return null;
+  });
+  forgetAccess(userId);
+  return result;
 }

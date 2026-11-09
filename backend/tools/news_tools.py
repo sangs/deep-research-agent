@@ -1,6 +1,6 @@
 from typing import Literal
 
-from services.db import get_pool
+from services.db import user_conn, worker_conn
 from services.exa_client import search_news
 
 REGION_KEYWORDS: dict[str, str] = {
@@ -16,14 +16,15 @@ REGION_KEYWORDS: dict[str, str] = {
 async def load_sources(user_id: str | None = None) -> dict:
     """A user's own source lists (curated_sources). With no user — MCP callers,
     which never get user data — the default_sources template instead."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        if user_id:
+    if user_id:
+        # As that user: row security returns only their own lists.
+        async with user_conn(user_id) as conn:
             rows = await conn.fetch(
                 "SELECT domain, list_type FROM curated_sources WHERE user_id = $1 ORDER BY added_at",
                 user_id,
             )
-        else:
+    else:
+        async with worker_conn('mcp_defaults') as conn:
             rows = await conn.fetch(
                 "SELECT domain, list_type FROM default_sources ORDER BY list_type, domain"
             )

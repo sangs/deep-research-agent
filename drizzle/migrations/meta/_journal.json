@@ -64,6 +64,20 @@
       "when": 1793207921314,
       "tag": "0008_usage_events_created_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794253583522,
+      "tag": "0009_drop_curated_sources_owner_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794253586429,
+      "tag": "0010_rls_roles",
+      "breakpoints": true
     }
   ]
 }

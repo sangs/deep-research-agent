@@ -21,7 +21,7 @@ import json
 import time
 import uuid
 
-from services.db import get_pool
+from services.db import worker_conn
 
 FORBIDDEN_LABELS = frozenset({'TRASH', 'SPAM'})
 SYSTEM_LABELS_ALLOWED = frozenset({'INBOX'})
@@ -121,8 +121,7 @@ def _restore_plan(before: dict[str, list[str]], now: dict[str, list[str]], touch
 async def _record(kind: str, actor: str, message_ids: list[str], add_ids: list[str], remove_ids: list[str],
                   label_names: list[str], before: dict[str, list[str]]) -> str:
     action_id = str(uuid.uuid4())
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         await conn.execute(
             "INSERT INTO gmail_actions (id, kind, actor, message_ids, added_label_ids, removed_label_ids, label_names, before, created_at) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)",
@@ -146,8 +145,7 @@ async def apply_groups(service, kind: str, actor: str, groups: list[dict], move:
 
 
 async def undo_action(service, action_id: str, actor: str) -> dict:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         row = await conn.fetchrow("SELECT * FROM gmail_actions WHERE id = $1", action_id)
     if row is None:
         raise GmailGuardError('Unknown action')
@@ -160,7 +158,7 @@ async def undo_action(service, action_id: str, actor: str) -> dict:
     for (add, remove), message_ids in plan.items():
         validate_change(list(add), list(remove), len(message_ids), confirm_bulk=True)
         await asyncio.to_thread(_batch_modify, service, message_ids, list(add), list(remove))
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         await conn.execute(
             "UPDATE gmail_actions SET undone_at = $2, undone_by = $3 WHERE id = $1",
             action_id, int(time.time() * 1000), actor,
@@ -169,8 +167,7 @@ async def undo_action(service, action_id: str, actor: str) -> dict:
 
 
 async def list_actions(limit: int = 20) -> list[dict]:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         rows = await conn.fetch(
             "SELECT id, kind, actor, cardinality(message_ids) AS messages, label_names, removed_label_ids, created_at, undone_at, undone_by "
             "FROM gmail_actions ORDER BY created_at DESC LIMIT $1",

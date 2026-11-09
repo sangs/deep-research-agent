@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/drizzle/db';
 import { newsDigests } from '@/drizzle/schema';
 import { eq, and, gt } from 'drizzle-orm';
+import { withUser } from '@/lib/db-access';
 import { sessionUserId } from '@/lib/user-id';
 
 // Override with NEWS_DIGEST_TTL_SECONDS env var (in Vercel or .env.local). Default: 1 hour.
 // Note: changing this only affects new saves — existing cached rows keep their original expires_at.
 const DIGEST_TTL_SECONDS = parseInt(process.env.NEWS_DIGEST_TTL_SECONDS ?? '3600', 10);
-
 
 // GET /api/history/news?key=... — load cached digest if fresh
 export async function GET(req: NextRequest) {
@@ -19,17 +18,19 @@ export async function GET(req: NextRequest) {
 
   const now = Math.floor(Date.now() / 1000);
 
-  const rows = await db
-    .select({ digest: newsDigests.digest })
-    .from(newsDigests)
-    .where(
-      and(
-        eq(newsDigests.cacheKey, cacheKey),
-        eq(newsDigests.userId, userId),
-        gt(newsDigests.expiresAt, now)
+  const rows = await withUser(userId, (tx) =>
+    tx
+      .select({ digest: newsDigests.digest })
+      .from(newsDigests)
+      .where(
+        and(
+          eq(newsDigests.cacheKey, cacheKey),
+          eq(newsDigests.userId, userId),
+          gt(newsDigests.expiresAt, now)
+        )
       )
-    )
-    .limit(1);
+      .limit(1),
+  );
 
   if (rows.length === 0) return NextResponse.json({ digest: null });
 
@@ -54,40 +55,42 @@ export async function POST(req: NextRequest) {
   // Upsert, scoped per user — cacheKey alone is no longer globally unique
   // (two different userIds computing the same key used to silently clobber
   // each other's row; uniqueness is now the composite (userId, cacheKey)).
-  await db
-    .insert(newsDigests)
-    .values({
-      id,
-      userId,
-      cacheKey,
-      digest: JSON.stringify(digest),
-      mode: mode ?? null,
-      locked: !!locked,
-      label: label ?? null,
-      tags: tags ?? [],
-      articleCount: articleCount ?? 0,
-      rangeStart: rangeStart ?? null,
-      rangeEnd: rangeEnd ?? null,
-      generatedAt: now,
-      expiresAt: now + effectiveTtl,
-    })
-    .onConflictDoUpdate({
-      target: [newsDigests.userId, newsDigests.cacheKey],
-      set: {
+  await withUser(userId, (tx) =>
+    tx
+      .insert(newsDigests)
+      .values({
+        id,
+        userId,
+        cacheKey,
         digest: JSON.stringify(digest),
         mode: mode ?? null,
         locked: !!locked,
-        // Replacing a saved digest (Re-run & replace, historical auto-save) keeps
-        // its name and tags unless the caller sends new ones.
-        ...(label !== undefined && { label: label ?? null }),
-        ...(tags !== undefined && { tags: tags ?? [] }),
+        label: label ?? null,
+        tags: tags ?? [],
         articleCount: articleCount ?? 0,
         rangeStart: rangeStart ?? null,
         rangeEnd: rangeEnd ?? null,
         generatedAt: now,
         expiresAt: now + effectiveTtl,
-      },
-    });
+      })
+      .onConflictDoUpdate({
+        target: [newsDigests.userId, newsDigests.cacheKey],
+        set: {
+          digest: JSON.stringify(digest),
+          mode: mode ?? null,
+          locked: !!locked,
+          // Replacing a saved digest (Re-run & replace, historical auto-save) keeps
+          // its name and tags unless the caller sends new ones.
+          ...(label !== undefined && { label: label ?? null }),
+          ...(tags !== undefined && { tags: tags ?? [] }),
+          articleCount: articleCount ?? 0,
+          rangeStart: rangeStart ?? null,
+          rangeEnd: rangeEnd ?? null,
+          generatedAt: now,
+          expiresAt: now + effectiveTtl,
+        },
+      }),
+  );
 
   return NextResponse.json({ ok: true });
 }
@@ -108,10 +111,12 @@ export async function PATCH(req: NextRequest) {
   if ('tags' in body) set.tags = body.tags ?? [];
   if (Object.keys(set).length === 0) return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
 
-  await db
-    .update(newsDigests)
-    .set(set)
-    .where(and(eq(newsDigests.cacheKey, cacheKey), eq(newsDigests.userId, userId)));
+  await withUser(userId, (tx) =>
+    tx
+      .update(newsDigests)
+      .set(set)
+      .where(and(eq(newsDigests.cacheKey, cacheKey), eq(newsDigests.userId, userId))),
+  );
 
   return NextResponse.json({ ok: true });
 }
@@ -124,9 +129,9 @@ export async function DELETE(req: NextRequest) {
   const cacheKey = req.nextUrl.searchParams.get('key');
   if (!cacheKey) return NextResponse.json({ error: 'Missing key' }, { status: 400 });
 
-  await db
-    .delete(newsDigests)
-    .where(and(eq(newsDigests.cacheKey, cacheKey), eq(newsDigests.userId, userId)));
+  await withUser(userId, (tx) =>
+    tx.delete(newsDigests).where(and(eq(newsDigests.cacheKey, cacheKey), eq(newsDigests.userId, userId))),
+  );
 
   return NextResponse.json({ ok: true });
 }

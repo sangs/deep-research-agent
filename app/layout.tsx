@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { DM_Serif_Display, Plus_Jakarta_Sans, Geist_Mono } from "next/font/google";
 import { NavLinks } from "@/components/nav-links";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { LogOut, Users } from "lucide-react";
+import { CircleUser, LogOut, Users } from "lucide-react";
 import Link from "next/link";
 import { signOut } from "@/auth";
 import { isOwner, sessionUser } from "@/lib/user-id";
@@ -82,6 +82,16 @@ export default async function RootLayout({
                   className="h-8 w-8 inline-flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <Users className="h-4 w-4" />
+                </Link>
+              )}
+              {signedIn && (
+                <Link
+                  href="/account"
+                  title="Account"
+                  aria-label="Account"
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <CircleUser className="h-4 w-4" />
                 </Link>
               )}
               <ThemeToggle />

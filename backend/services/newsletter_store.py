@@ -11,7 +11,7 @@ not stored: it depends on the set of emails in a run.
 
 import time
 
-from services.db import get_pool
+from services.db import worker_conn
 
 RETENTION_DAYS = 90  # rows older than this are purged; re-summarized if requested again
 
@@ -23,8 +23,7 @@ async def load_emails(message_ids: list[str], summary_version: int) -> dict[str,
     """
     if not message_ids:
         return {}
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         rows = await conn.fetch(
             'SELECT message_id, sender, subject, date_header, snippet, links, summary '
             'FROM newsletter_emails WHERE message_id = ANY($1::text[]) AND summary_version = $2',
@@ -55,8 +54,7 @@ async def save_emails(emails: list[dict], summary_version: int) -> None:
     ]
     if not rows:
         return
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         await conn.executemany(
             'INSERT INTO newsletter_emails '
             '(message_id, sender, subject, date_header, snippet, links, summary, summary_version, created_at) '
@@ -71,7 +69,6 @@ async def save_emails(emails: list[dict], summary_version: int) -> None:
 async def purge_expired() -> int:
     """Delete rows older than RETENTION_DAYS. Returns the number deleted."""
     cutoff = int((time.time() - RETENTION_DAYS * 86400) * 1000)
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    async with worker_conn('newsletter') as conn:
         status = await conn.execute('DELETE FROM newsletter_emails WHERE created_at < $1', cutoff)
     return int(status.split()[-1])

@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/drizzle/db';
 import { newsDigests } from '@/drizzle/schema';
 import { eq, and, desc } from 'drizzle-orm';
+import { withUser } from '@/lib/db-access';
 import { sessionUserId } from '@/lib/user-id';
-
 
 // GET /api/history/news/list?mode=newsletter&limit=20&offset=0 — lightweight
 // metadata for the Saved Digests picker. Never touches the `digest` JSON
@@ -16,22 +15,24 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(parseInt(req.nextUrl.searchParams.get('limit') ?? '20', 10) || 20, 50);
   const offset = Math.max(parseInt(req.nextUrl.searchParams.get('offset') ?? '0', 10) || 0, 0);
 
-  const rows = await db
-    .select({
-      cacheKey: newsDigests.cacheKey,
-      label: newsDigests.label,
-      tags: newsDigests.tags,
-      locked: newsDigests.locked,
-      articleCount: newsDigests.articleCount,
-      rangeStart: newsDigests.rangeStart,
-      rangeEnd: newsDigests.rangeEnd,
-      generatedAt: newsDigests.generatedAt,
-    })
-    .from(newsDigests)
-    .where(and(eq(newsDigests.userId, userId), eq(newsDigests.mode, mode), eq(newsDigests.locked, true)))
-    .orderBy(desc(newsDigests.generatedAt))
-    .limit(limit + 1)
-    .offset(offset);
+  const rows = await withUser(userId, (tx) =>
+    tx
+      .select({
+        cacheKey: newsDigests.cacheKey,
+        label: newsDigests.label,
+        tags: newsDigests.tags,
+        locked: newsDigests.locked,
+        articleCount: newsDigests.articleCount,
+        rangeStart: newsDigests.rangeStart,
+        rangeEnd: newsDigests.rangeEnd,
+        generatedAt: newsDigests.generatedAt,
+      })
+      .from(newsDigests)
+      .where(and(eq(newsDigests.userId, userId), eq(newsDigests.mode, mode), eq(newsDigests.locked, true)))
+      .orderBy(desc(newsDigests.generatedAt))
+      .limit(limit + 1)
+      .offset(offset),
+  );
 
   return NextResponse.json({ items: rows.slice(0, limit), hasMore: rows.length > limit });
 }

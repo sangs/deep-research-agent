@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { BACKEND_URL, backendAuthHeaders } from '@/lib/backend-auth';
+import { userAssertionHeaders } from '@/lib/user-assertion';
 import { isOwner, sessionUser } from '@/lib/user-id';
 
-/** Forwards an owner-only request to a private backend path. POST bodies get
- *  `actor` from the session (never the client) for the backend's audit trail.
+/** Forwards an owner-only request to a private backend path with the signed
+ *  user assertion; the backend takes the actor (audit trail) and the owner check from it.
  *  Used by /api/gmail/[op] and /api/newsletter/ingest/[op]. */
 export async function forwardOwnerRequest(
   req: Request,
@@ -15,7 +16,7 @@ export async function forwardOwnerRequest(
   if (!isOwner(user)) return NextResponse.json({ error: forbiddenMessage }, { status: 403 });
   let authHeaders: Record<string, string>;
   try {
-    authHeaders = await backendAuthHeaders(req, BACKEND_URL);
+    authHeaders = { ...(await backendAuthHeaders(req, BACKEND_URL)), ...(await userAssertionHeaders(user)) };
   } catch (e) {
     console.error(`[${backendPath}] backend auth failed:`, e);
     return NextResponse.json({ error: 'Could not authenticate to the backend' }, { status: 502 });
@@ -23,7 +24,7 @@ export async function forwardOwnerRequest(
   const init: RequestInit = { method: req.method };
   if (req.method === 'POST') {
     const body = await req.json().catch(() => ({}));
-    init.body = JSON.stringify({ ...body, actor: user.email ?? 'unknown', user_id: user.id });
+    init.body = JSON.stringify({ ...body, actor: undefined, user_id: undefined });
   }
   const search = new URL(req.url).search;
   let upstream: Response;
