@@ -141,6 +141,7 @@ async def run_worker(sweep: bool) -> None:
     async with worker_conn('newsletter') as conn:
         await _expire_stale(conn)
     await purge_audit_log()
+    await purge_deleted_accounts()
 
     service = None
     while (job := await _claim_next()) is not None:
@@ -316,6 +317,21 @@ async def _sweep(service) -> None:
 
 
 AUDIT_RETENTION_DAYS = 365
+# Days between an account deletion request and the purge (design 14 §8).
+# Must match DELETION_GRACE_DAYS in lib/users.ts (shown to users).
+DELETION_GRACE_DAYS = 30
+
+
+async def purge_deleted_accounts() -> None:
+    """Remove accounts whose deletion grace period is over, with all their data
+    (SQL function purge_deleted_accounts, drizzle/migrations/0011)."""
+    try:
+        async with worker_conn('retention') as conn:
+            n = await conn.fetchval('SELECT purge_deleted_accounts($1)', DELETION_GRACE_DAYS)
+        if n:
+            print(f'[retention] purged {n} deleted account(s)')
+    except Exception as e:  # never let retention stop the newsletter work
+        print(f'[retention] account purge failed: {type(e).__name__}: {e}')
 
 
 async def purge_audit_log() -> None:

@@ -1,9 +1,11 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { signOut } from '@/auth';
+import { cancelMyDeletion } from '@/app/account/actions';
+import { DELETION_GRACE_DAYS, deletionDueAt } from '@/lib/users';
 import { sessionAccess } from '@/lib/user-id';
 
-// Where pending and suspended accounts land (auth.ts `authorized` sends them here).
+// Where pending, suspended and scheduled-for-deletion accounts land (auth.ts `authorized` sends them here).
 export const metadata: Metadata = { title: 'Access — Research Suite' };
 
 const COPY = {
@@ -15,18 +17,52 @@ const COPY = {
     title: 'Your access is suspended',
     body: 'The owner has suspended this account. Your data has been kept. Contact the owner if you think this is a mistake.',
   },
+  deleting: {
+    title: 'Your account is scheduled for deletion',
+    body: `The account is locked and everything stored for it will be permanently deleted ${DELETION_GRACE_DAYS} days after the request.`,
+  },
 } as const;
 
-export default async function AccessPage() {
+function formatDay(ms: number): string {
+  return new Date(ms).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+}
+
+export default async function AccessPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const access = await sessionAccess();
   if (!access) redirect('/api/auth/signin');
   if (access.status === 'active') redirect('/');
   const copy = COPY[access.status];
+  const { error } = await searchParams;
+  const selfRequested = access.status === 'deleting' && access.deletionRequestedBy === access.id;
   return (
     <main className="container mx-auto max-w-lg px-4 py-16">
       <div className="rounded-xl border border-border/60 bg-card p-6 space-y-4">
         <h1 className="text-xl font-semibold">{copy.title}</h1>
         <p className="text-sm text-muted-foreground leading-relaxed">{copy.body}</p>
+        {access.status === 'deleting' && access.deletionRequestedAt && (
+          <div className="space-y-3 text-sm">
+            <p>
+              Deletion date: <span className="font-medium">{formatDay(deletionDueAt(access.deletionRequestedAt))}</span> (UTC).
+            </p>
+            {selfRequested ? (
+              <form action={cancelMyDeletion}>
+                <button
+                  type="submit"
+                  className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:opacity-90"
+                >
+                  Cancel deletion and keep my account
+                </button>
+              </form>
+            ) : (
+              <p className="text-muted-foreground">The owner scheduled this deletion. Contact the owner to keep the account.</p>
+            )}
+          </div>
+        )}
+        {error && (
+          <p role="alert" className="text-sm text-[#d03b3b]">
+            {error}
+          </p>
+        )}
         <p className="text-sm">
           Signed in as <span className="font-medium">{access.email}</span>
         </p>

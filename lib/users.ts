@@ -13,7 +13,17 @@ import { auditLog, curatedSources, defaultSources, userIdentities, users, usageE
 import { isLegacyAllowedEmail, isOwnerBootstrapEmail } from '@/lib/auth-allowlist';
 
 export type Role = 'owner' | 'member' | 'system';
-export type AccessStatus = 'pending' | 'active' | 'suspended';
+export type AccessStatus = 'pending' | 'active' | 'suspended' | 'deleting';
+
+/** Days between a deletion request and the purge (design 14 §8). Must match
+ *  DELETION_GRACE_DAYS in backend/services/ingest.py, which runs the purge. */
+export const DELETION_GRACE_DAYS = 30;
+const DAY_MS = 86_400_000;
+
+/** When an account in status 'deleting' will be purged (epoch ms). */
+export function deletionDueAt(requestedAt: number): number {
+  return requestedAt + DELETION_GRACE_DAYS * DAY_MS;
+}
 
 /** The owner's id: kept from the single-tenant era so existing data needed no move. */
 export const OWNER_LEGACY_USER_ID = '32087c9e-d37e-4b7c-896e-58da85f4d108';
@@ -43,7 +53,9 @@ export type AuditAction =
   | 'access_request_rejected'
   | 'access_suspended'
   | 'access_reactivated'
-  | 'account_deleted';
+  | 'account_deletion_requested'
+  | 'account_deletion_cancelled'
+  | 'account_deleted'; // written by purge_deleted_accounts() (migration 0011)
 
 export async function audit(
   ex: Executor,
@@ -72,6 +84,8 @@ export interface UserAccess {
   name: string | null;
   role: Role;
   status: AccessStatus;
+  deletionRequestedAt: number | null;
+  deletionRequestedBy: string | null;
 }
 
 /** A suspension takes effect on other server instances within this window. */
@@ -88,7 +102,15 @@ export async function getUserAccess(userId: string): Promise<UserAccess | null> 
   // As the user themselves: row security returns their own row only.
   const [row] = await withUser(userId, (tx) =>
     tx
-      .select({ id: users.id, email: users.email, name: users.name, role: users.role, status: users.status })
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        role: users.role,
+        status: users.status,
+        deletionRequestedAt: users.deletionRequestedAt,
+        deletionRequestedBy: users.deletionRequestedBy,
+      })
       .from(users)
       .where(eq(users.id, userId))
       .limit(1),
@@ -205,6 +227,7 @@ export interface AdminUserRow {
   linked: boolean; // has signed in at least once (false: pre-approved, waiting)
   spentTodayUsd: number; // current UTC day
   spent30dUsd: number;
+  deletionDueAt: number | null; // status 'deleting': when the purge removes it
 }
 
 export async function listUsersForOwner(): Promise<AdminUserRow[]> {
@@ -220,6 +243,7 @@ export async function listUsersForOwner(): Promise<AdminUserRow[]> {
         status: users.status,
         createdAt: users.createdAt,
         lastLoginAt: users.lastLoginAt,
+        deletionRequestedAt: users.deletionRequestedAt,
         linked: sql<boolean>`exists (select 1 from ${userIdentities} where ${userIdentities.userId} = ${users.id})`,
       })
       .from(users)
@@ -234,8 +258,9 @@ export async function listUsersForOwner(): Promise<AdminUserRow[]> {
       .where(gte(usageEvents.createdAt, now - 30 * 86_400_000))
       .groupBy(usageEvents.userId);
     const byUser = new Map(spend.map((s) => [s.userId, s]));
-    return rows.map((r) => ({
+    return rows.map(({ deletionRequestedAt, ...r }) => ({
       ...r,
+      deletionDueAt: deletionRequestedAt ? deletionDueAt(deletionRequestedAt) : null,
       role: r.role as Role,
       status: r.status as AccessStatus,
       spentTodayUsd: Number(byUser.get(r.id)?.today ?? 0),
@@ -244,7 +269,7 @@ export async function listUsersForOwner(): Promise<AdminUserRow[]> {
   });
 }
 
-export type OwnerAction = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete';
+export type OwnerAction = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete' | 'cancel_deletion';
 
 /** Apply an owner action to a member. Returns an error message, or null on success. */
 export async function applyOwnerAction(ownerId: string, targetId: string, action: OwnerAction): Promise<string | null> {
@@ -277,10 +302,13 @@ export async function applyOwnerAction(ownerId: string, targetId: string, action
       await audit(tx, 'access_suspended', ownerId, targetId);
       return null;
     }
-    if (action === 'delete') {
-      // Removes the account and, through ON DELETE CASCADE, all of its data.
-      await tx.delete(users).where(eq(users.id, targetId));
-      await audit(tx, 'account_deleted', ownerId, targetId, { by: 'owner', previousStatus: from });
+    if (action === 'delete' && (from === 'active' || from === 'suspended')) {
+      // Scheduled: the account is locked now and purged after the grace period.
+      await scheduleDeletion(tx, targetId, ownerId, from);
+      return null;
+    }
+    if (action === 'cancel_deletion' && from === 'deleting') {
+      await cancelDeletion(tx, targetId, ownerId);
       return null;
     }
     if (action === 'reactivate' && from === 'suspended') {
@@ -331,16 +359,59 @@ export async function preapproveEmail(ownerId: string, rawEmail: string): Promis
   });
 }
 
-/** A member deletes their own account: the user row and, through ON DELETE
- *  CASCADE, every personal row (research, digests, sources, usage). The owner
- *  account can't be deleted this way. Returns an error message, or null. */
-export async function deleteOwnAccount(userId: string): Promise<string | null> {
+// ── Account deletion (design 14 §8) ─────────────────────────────────────────
+// Deleting is two steps: a request locks the account at once (status
+// 'deleting': no sign-in to the app, no API access) and the background job's
+// purge_deleted_accounts() removes it, with all of its data, after
+// DELETION_GRACE_DAYS. Until then the requester can cancel.
+
+async function scheduleDeletion(tx: Tx, userId: string, requestedBy: string, from: AccessStatus) {
+  await tx
+    .update(users)
+    .set({ status: 'deleting', deletionRequestedAt: Date.now(), deletionRequestedBy: requestedBy, statusBeforeDeletion: from })
+    .where(eq(users.id, userId));
+  await audit(tx, 'account_deletion_requested', requestedBy, userId, {
+    by: requestedBy === userId ? 'self' : 'owner',
+    graceDays: DELETION_GRACE_DAYS,
+  });
+}
+
+async function cancelDeletion(tx: Tx, userId: string, cancelledBy: string) {
+  const [row] = await tx.select({ before: users.statusBeforeDeletion }).from(users).where(eq(users.id, userId)).limit(1);
+  const restored = row?.before === 'suspended' ? 'suspended' : 'active';
+  await tx
+    .update(users)
+    .set({ status: restored, deletionRequestedAt: null, deletionRequestedBy: null, statusBeforeDeletion: null })
+    .where(eq(users.id, userId));
+  await audit(tx, 'account_deletion_cancelled', cancelledBy, userId, { by: cancelledBy === userId ? 'self' : 'owner', restored });
+}
+
+/** A member asks to delete their own account. The owner account can't. Returns an error message, or null. */
+export async function requestOwnDeletion(userId: string): Promise<string | null> {
   const result = await withWorker('account_delete', async (tx) => {
-    const [me] = await tx.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
+    const [me] = await tx.select({ role: users.role, status: users.status }).from(users).where(eq(users.id, userId)).limit(1);
     if (!me) return 'Account not found';
     if (me.role !== 'member') return 'The owner account cannot be deleted here';
-    await tx.delete(users).where(eq(users.id, userId));
-    await audit(tx, 'account_deleted', userId, userId, { by: 'self' });
+    if (me.status !== 'active') return 'This account cannot be deleted right now';
+    await scheduleDeletion(tx, userId, userId, 'active');
+    return null;
+  });
+  forgetAccess(userId);
+  return result;
+}
+
+/** A member cancels a deletion they requested themselves (from /access). An
+ *  owner-requested deletion can only be cancelled by the owner. */
+export async function cancelOwnDeletion(userId: string): Promise<string | null> {
+  const result = await withWorker('account_delete', async (tx) => {
+    const [me] = await tx
+      .select({ status: users.status, by: users.deletionRequestedBy })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!me || me.status !== 'deleting') return 'This account is not scheduled for deletion';
+    if (me.by !== userId) return 'The owner scheduled this deletion; only the owner can cancel it';
+    await cancelDeletion(tx, userId, userId);
     return null;
   });
   forgetAccess(userId);

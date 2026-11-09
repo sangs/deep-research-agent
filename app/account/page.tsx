@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { ArrowLeft, Download } from 'lucide-react';
 import { sessionUser } from '@/lib/user-id';
+import { DELETION_GRACE_DAYS } from '@/lib/users';
 import { DeleteAccountForm } from './delete-account-form';
 
 export const metadata: Metadata = { title: 'Account — Research Suite' };
@@ -13,6 +14,17 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h2 className="text-base font-semibold">{title}</h2>
       {children}
     </section>
+  );
+}
+
+function DownloadButton() {
+  return (
+    <a
+      href="/api/account/export"
+      className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted transition-colors"
+    >
+      <Download className="h-4 w-4" /> Download my data
+    </a>
   );
 }
 
@@ -35,30 +47,44 @@ export default async function AccountPage() {
 
       <Section title="Export your data">
         <p className="text-sm text-muted-foreground">
-          One JSON file with your research sessions, digests (saved and cached), source lists, usage and budget raises.
+          One JSON file, downloaded to this device only, with your research sessions, digests (saved and cached),
+          source lists, usage and budget raises. Nothing is sent anywhere else.
         </p>
-        <a
-          href="/api/account/export"
-          className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted transition-colors"
-        >
-          <Download className="h-4 w-4" /> Download my data
-        </a>
+        <DownloadButton />
       </Section>
 
       <Section title="Delete your account">
         {isMember ? (
           <>
-            <p className="text-sm text-muted-foreground">
-              This permanently deletes your account and everything stored for it: research history, digests, sources,
-              usage and budget history. It can&apos;t be undone. Export your data first if you want a copy. You can request
-              access again later as a new account.
+            <ol className="list-decimal pl-5 space-y-2 text-sm text-muted-foreground">
+              <li>
+                <span className="text-foreground">Download your data first</span> if you want a copy. You won&apos;t be
+                able to use the app after the next step.
+                <div className="mt-2">
+                  <DownloadButton />
+                </div>
+              </li>
+              <li>
+                Confirm below. Your account is locked at once and you&apos;re signed out.{' '}
+                <span className="text-foreground">
+                  Everything is permanently deleted after {DELETION_GRACE_DAYS} days
+                </span>
+                : research history, digests, sources, usage and budget history. To change your mind, sign in again
+                within those {DELETION_GRACE_DAYS} days and cancel.
+              </li>
+            </ol>
+            <p className="text-xs text-muted-foreground">
+              After deletion, a record that an account was deleted is kept without your email address for up to one
+              year. Encrypted database backups and server logs may still contain your data until they expire (see the{' '}
+              <Link href="/privacy#deletion" className="underline underline-offset-2">
+                privacy policy
+              </Link>
+              ).
             </p>
             <DeleteAccountForm email={user.email} />
           </>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            The owner account can&apos;t be deleted from the app.
-          </p>
+          <p className="text-sm text-muted-foreground">The owner account can&apos;t be deleted from the app.</p>
         )}
       </Section>
     </main>

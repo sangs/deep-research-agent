@@ -4,7 +4,7 @@ import { applyOwnerAction, listUsersForOwner, preapproveEmail, type OwnerAction 
 
 // Owner console API. Account + cost only: nothing here reads any user's
 // research, digests, sources or email.
-const ACTIONS = new Set<OwnerAction>(['approve', 'reject', 'suspend', 'reactivate', 'delete']);
+const ACTIONS = new Set<OwnerAction>(['approve', 'reject', 'suspend', 'reactivate', 'delete', 'cancel_deletion']);
 
 async function owner() {
   const user = await sessionUser();
@@ -17,7 +17,8 @@ export async function GET() {
   return NextResponse.json({ users: await listUsersForOwner() });
 }
 
-// POST /api/admin/users { action: 'approve'|'reject'|'suspend'|'reactivate'|'delete', userId }
+// POST /api/admin/users { action: 'approve'|'reject'|'suspend'|'reactivate'|'delete'|'cancel_deletion', userId }
+// 'delete' schedules the deletion (30-day grace period, design 14 §8).
 //                     | { action: 'preapprove', email }
 export async function POST(req: Request) {
   const user = await owner();

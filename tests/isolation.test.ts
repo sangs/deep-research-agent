@@ -244,22 +244,54 @@ suite('per-user isolation', () => {
       await admin`delete from users where id = ${result.userId}`;
     });
 
-    it('the owner deleting a member removes all of their data and audits it', async () => {
-      const { applyOwnerAction } = await import('@/lib/users');
+    it('owner delete is scheduled: the account is locked at once, data kept, and the owner can cancel', async () => {
+      const { applyOwnerAction, getUserAccess } = await import('@/lib/users');
       expect(await applyOwnerAction(OWNER, A, 'delete')).toBeNull();
-      expect(await countFor(A)).toEqual({ research: 0, digests: 0, sources: 0, usage: 0, raises: 0, rate: 0, users: 0 });
-      const [audit] = await admin`select action, actor_user_id from audit_log where target_user_id = ${A} order by created_at desc limit 1`;
-      expect(audit).toEqual({ action: 'account_deleted', actor_user_id: OWNER });
-      expect(await countFor(B)).toMatchObject({ research: 2, users: 1 });
+      expect((await getUserAccess(A))?.status).toBe('deleting');
+      expect(await countFor(A)).toMatchObject({ research: 2, sources: 2, users: 1 });
+      const { cancelOwnDeletion } = await import('@/lib/users');
+      expect(await cancelOwnDeletion(A)).toMatch(/only the owner/); // the member can't undo the owner's request
+      expect(await applyOwnerAction(OWNER, A, 'cancel_deletion')).toBeNull();
+      const [row] = await admin`select status, deletion_requested_at from users where id = ${A}`;
+      expect(row).toEqual({ status: 'active', deletion_requested_at: null });
     });
 
-    it('a member can delete their own account; the owner account cannot be deleted this way', async () => {
-      const { deleteOwnAccount } = await import('@/lib/users');
-      expect(await deleteOwnAccount(OWNER)).toMatch(/owner/i);
-      expect(await deleteOwnAccount(B)).toBeNull();
-      expect((await countFor(B)).users).toBe(0);
+    it('a member can request and cancel deletion of their own account; the owner account cannot be deleted', async () => {
+      const { requestOwnDeletion, cancelOwnDeletion } = await import('@/lib/users');
+      expect(await requestOwnDeletion(OWNER)).toMatch(/owner/i);
+      expect(await requestOwnDeletion(B)).toBeNull();
+      const [scheduled] = await admin`select status, deletion_requested_by from users where id = ${B}`;
+      expect(scheduled).toEqual({ status: 'deleting', deletion_requested_by: B });
+      expect(await cancelOwnDeletion(B)).toBeNull();
+      const [restored] = await admin`select status from users where id = ${B}`;
+      expect(restored.status).toBe('active');
+    });
+
+    it('the purge removes only accounts past the 30-day grace period, with all data, and strips emails from the audit log', async () => {
+      const { withWorker } = await import('@/lib/db-access');
+      const { requestOwnDeletion, applyOwnerAction } = await import('@/lib/users');
+      const t = Date.now();
+      await admin`insert into audit_log (id, actor_user_id, action, target_user_id, metadata, created_at)
+                  values ('pre-approve-A', ${OWNER}, 'access_preapproved', ${A}, ${admin.json({ email: 'a@example.com' })}, ${t})`;
+      expect(await applyOwnerAction(OWNER, A, 'delete')).toBeNull();
+      expect(await requestOwnDeletion(B)).toBeNull();
+      // A's request is 31 days old; B's is from today.
+      await admin`update users set deletion_requested_at = ${t - 31 * 86_400_000} where id = ${A}`;
+
+      const [res] = await withWorker('retention', (tx) => tx.execute(sql`select purge_deleted_accounts(30) n`));
+      expect(res.n).toBe(1);
+      expect(await countFor(A)).toEqual({ research: 0, digests: 0, sources: 0, usage: 0, raises: 0, rate: 0, users: 0 });
+      expect(await countFor(B)).toMatchObject({ research: 2, users: 1 }); // still in its grace period
+      const entries = await admin`select action, metadata from audit_log where target_user_id = ${A} or actor_user_id = ${A}`;
+      expect(entries.some((e) => JSON.stringify(e.metadata).includes('@'))).toBe(false);
+      expect(entries.find((e) => e.action === 'account_deleted')?.metadata).toEqual({ grace_days: 30, requested_by: 'owner' });
       const [owner] = await admin`select count(*)::int n from users where id = ${OWNER}`;
       expect(owner.n).toBe(1);
+    });
+
+    it('a locked (deleting) account gets no data through the app', async () => {
+      const { getUserAccess } = await import('@/lib/users');
+      expect((await getUserAccess(B))?.status).toBe('deleting'); // proxy.ts sends non-active users to /access; API 403
     });
   });
 });

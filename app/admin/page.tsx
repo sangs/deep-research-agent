@@ -17,20 +17,22 @@ interface AdminUser {
   email: string;
   name: string | null;
   role: 'owner' | 'member' | 'system';
-  status: 'pending' | 'active' | 'suspended';
+  status: 'pending' | 'active' | 'suspended' | 'deleting';
   createdAt: number;
   lastLoginAt: number | null;
   linked: boolean;
   spentTodayUsd: number;
   spent30dUsd: number;
+  deletionDueAt: number | null;
 }
 
-type Action = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete';
+type Action = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete' | 'cancel_deletion';
 
 const STATUS_STYLE: Record<AdminUser['status'], string> = {
   pending: 'bg-[#fab219]/15 text-foreground border-[#fab219]/40',
   active: 'bg-[#0ca30c]/15 text-foreground border-[#0ca30c]/40',
   suspended: 'bg-muted text-muted-foreground border-border',
+  deleting: 'bg-[#d03b3b]/10 text-foreground border-[#d03b3b]/40',
 };
 
 function when(ms: number | null): string {
@@ -200,7 +202,7 @@ export default function AdminPage() {
                     <td className="py-2.5 text-right">
                       {u.role === 'member' && confirmDelete === u.id ? (
                         <span className="inline-flex flex-wrap items-center justify-end gap-2">
-                          <span className="text-xs">Delete this account and all its data?</span>
+                          <span className="text-xs">Lock now and delete all its data in 30 days?</span>
                           <Button
                             size="sm"
                             variant="destructive"
@@ -227,7 +229,17 @@ export default function AdminPage() {
                           Reactivate
                         </Button>
                       )}
-                      {u.role === 'member' && (
+                      {u.role === 'member' && u.status === 'deleting' && (
+                        <>
+                          <span className="self-center text-xs text-muted-foreground">
+                            Deletes {u.deletionDueAt ? new Date(u.deletionDueAt).toLocaleDateString() : 'soon'}
+                          </span>
+                          <Button size="sm" variant="outline" onClick={() => act(u, 'cancel_deletion')} disabled={!!busy}>
+                            Cancel deletion
+                          </Button>
+                        </>
+                      )}
+                      {u.role === 'member' && (u.status === 'active' || u.status === 'suspended') && (
                         <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(u.id)} disabled={!!busy}>
                           Delete
                         </Button>

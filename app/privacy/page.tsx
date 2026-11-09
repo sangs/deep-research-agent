@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   title: 'Privacy Policy — Research Suite',
 };
 
-const UPDATED = '2026-10-28';
+const UPDATED = '2026-11-09';
 const CONTACT = process.env.NEXT_PUBLIC_PRIVACY_CONTACT ?? 'the app owner';
 
 export default function PrivacyPage() {
@@ -85,6 +85,12 @@ export default function PrivacyPage() {
           <li>Per-email summaries: deleted 90 days after they are made.</li>
           <li>News results: reused for 1 hour, kept until removed. Saved newsletter digests: until the owner removes them.</li>
           <li>Research sessions: until deleted from the History drawer.</li>
+          <li>Your account and everything tied to it: until you or the owner delete the account (see below).</li>
+          <li>
+            Security log (sign-ins and access changes): 1 year. Entries about a deleted account keep only an internal id,
+            not your email address.
+          </li>
+          <li>Server request logs (Vercel, Google Cloud): up to 30 days; they may include your email address.</li>
         </ul>
         <p>
           The owner can withdraw the app&apos;s Gmail access at any time at{' '}
@@ -93,6 +99,26 @@ export default function PrivacyPage() {
           </a>
           .
         </p>
+      </section>
+
+      <section id="deletion" className="space-y-2 scroll-mt-20">
+        <h2 className="text-base font-semibold">Exporting and deleting your data</h2>
+        <ul className="list-disc pl-5 space-y-1">
+          <li>
+            <strong>Export:</strong> on the Account page, &ldquo;Download my data&rdquo; saves one JSON file to your device with
+            your research sessions, digests, source lists, usage and budget history. It is not sent anywhere else.
+          </li>
+          <li>
+            <strong>Delete:</strong> on the Account page you can delete your account (the owner can also delete it). The account
+            is locked at once and everything tied to it is permanently deleted after a 30-day grace period. Until then you
+            can sign in and cancel; a deletion the owner requested can only be cancelled by the owner.
+          </li>
+          <li>
+            <strong>What remains afterwards:</strong> a security-log record that an account was deleted (internal id only, kept
+            1 year); the database provider&apos;s encrypted backups, until they expire on its backup schedule; and server
+            request logs, up to 30 days.
+          </li>
+        </ul>
       </section>
 
       <section className="space-y-2">

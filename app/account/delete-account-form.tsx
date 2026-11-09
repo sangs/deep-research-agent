@@ -28,7 +28,7 @@ export function DeleteAccountForm({ email }: { email: string }) {
         </p>
       )}
       <Button type="submit" variant="destructive" disabled={!matches || pending}>
-        {pending ? 'Deleting…' : 'Delete my account'}
+        {pending ? 'Scheduling…' : 'Delete my account'}
       </Button>
     </form>
   );
