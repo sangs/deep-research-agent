@@ -26,9 +26,16 @@ export async function forwardOwnerRequest(
     init.body = JSON.stringify({ ...body, actor: user.email ?? 'unknown', user_id: user.id });
   }
   const search = new URL(req.url).search;
-  const upstream = await fetch(`${BACKEND_URL}${backendPath}${search}`, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...authHeaders },
-  });
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${BACKEND_URL}${backendPath}${search}`, {
+      ...init,
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+    });
+  } catch (e) {
+    // Backend down or unreachable: a clean 502 instead of an unhandled 500.
+    console.error(`[${backendPath}] backend unreachable:`, e);
+    return NextResponse.json({ error: 'The backend is unavailable. Try again shortly.' }, { status: 502 });
+  }
   return new Response(upstream.body, { status: upstream.status, headers: { 'Content-Type': 'application/json' } });
 }
