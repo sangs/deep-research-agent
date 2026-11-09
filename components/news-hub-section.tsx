@@ -136,7 +136,6 @@ export function NewsHubSection() {
               description="AI/ML coverage from curated tech news sites, research labs, and engineering blogs"
               mode="curated"
               onStatusChange={handleCuratedStatus}
-              onManageSources={() => setSourceManagerOpen(true)}
             />
           </TabsContent>
 
@@ -147,7 +146,6 @@ export function NewsHubSection() {
               description="Latest research from AI labs — no time filter, showing most relevant results"
               mode="research"
               onStatusChange={handleResearchStatus}
-              onManageSources={() => setSourceManagerOpen(true)}
             />
           </TabsContent>
 
@@ -160,7 +158,6 @@ export function NewsHubSection() {
                   description="Pull and summarize newsletter emails from your Gmail inbox"
                   mode="newsletter"
                   onStatusChange={handleNewsletterStatus}
-                  onManageSources={() => setSourceManagerOpen(true)}
                 />
               </GmailOrganizeProvider>
             </TabsContent>

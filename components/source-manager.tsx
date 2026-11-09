@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { useAccount } from '@/context/account-context';
 
 /** Strip protocol, www., and trailing slashes so users can paste full URLs. */
 function normalizeDomain(value: string): string {
@@ -25,6 +26,8 @@ interface SourceManagerProps {
 }
 
 export function SourceManager({ open, onClose }: SourceManagerProps) {
+  // Newsletter is owner-only (the only mailbox is the owner's), so its sender list is too.
+  const { isOwner: showNewsletter } = useAccount();
   const [domains, setDomains] = useState<string[]>([]);
   const [researchDomains, setResearchDomains] = useState<string[]>([]);
   const [newsletterDomains, setNewsletterDomains] = useState<string[]>([]);
@@ -474,6 +477,7 @@ export function SourceManager({ open, onClose }: SourceManagerProps) {
             </p>
           </div>
 
+          {showNewsletter && (<>
           <Separator />
 
           {/* ── Newsletter Senders ──────────────────────────────────── */}
@@ -549,6 +553,7 @@ export function SourceManager({ open, onClose }: SourceManagerProps) {
               {newsletterDomains.length} sender{newsletterDomains.length !== 1 ? 's' : ''} · Changes save automatically
             </p>
           </div>
+          </>)}
         </div>
       </div>
     </div>
