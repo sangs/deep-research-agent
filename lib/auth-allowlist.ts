@@ -1,7 +1,10 @@
-// App-level sign-in allowlist: AUTH_ALLOWED_EMAILS is a comma-separated list of
-// Google account emails allowed to use the app. One list for the whole app —
-// every allowlisted user currently shares the same data (single-tenant), see
-// lib/user-id.ts.
+// Env-driven pieces of sign-in. Access itself is owner-approved and lives in the
+// database (lib/users.ts); these env vars only bootstrap the migration from the
+// single-tenant allowlist era:
+// - AUTH_OWNER_EMAILS: the email that claims the migrated owner account at its
+//   first sign-in (default: the first AUTH_ALLOWED_EMAILS entry).
+// - AUTH_ALLOWED_EMAILS: legacy allowlist. A new account with one of these emails
+//   starts active instead of pending. Empty it once Phase A is verified.
 
 function emailList(value: string | undefined): string[] {
   return (value ?? '')
@@ -10,15 +13,11 @@ function emailList(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
-export function isAllowedEmail(email: string | null | undefined): boolean {
-  if (!email) return false;
+export function isLegacyAllowedEmail(email: string): boolean {
   return emailList(process.env.AUTH_ALLOWED_EMAILS).includes(email.trim().toLowerCase());
 }
 
-/** Owners see account-level information (provider balances). AUTH_OWNER_EMAILS,
- *  defaulting to the first allowlisted email. */
-export function isOwnerEmail(email: string | null | undefined): boolean {
-  if (!email) return false;
+export function isOwnerBootstrapEmail(email: string): boolean {
   const owners = emailList(process.env.AUTH_OWNER_EMAILS);
   const effective = owners.length > 0 ? owners : emailList(process.env.AUTH_ALLOWED_EMAILS).slice(0, 1);
   return effective.includes(email.trim().toLowerCase());

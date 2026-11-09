@@ -112,8 +112,6 @@ interface NewsCategoryPanelProps {
   mode: 'general' | 'region' | 'curated' | 'research' | 'newsletter';
   /** Called whenever search status or article count changes — used for tab badges. */
   onStatusChange?: (status: string, count: number) => void;
-  /** Called when the user clicks "Manage sources" in the curated panel header. */
-  onManageSources?: () => void;
   /** @deprecated no longer used */
   placeholder?: React.ReactNode;
 }
@@ -125,7 +123,6 @@ export function NewsCategoryPanel({
   mode,
   placeholder,
   onStatusChange,
-  onManageSources,
 }: NewsCategoryPanelProps) {
   const { events, digest, thread, status, errorMsg, fromCache, ingest, run, stop, restore, reset } = useNewsStream();
   const { ensureBudget } = useBudgetGate();
@@ -447,14 +444,6 @@ export function NewsCategoryPanel({
             >
               <Bookmark className="h-3 w-3" />
               Saved digests
-            </button>
-          )}
-          {(mode === 'curated' || mode === 'research' || mode === 'newsletter') && onManageSources && (
-            <button
-              onClick={onManageSources}
-              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
-            >
-              Manage sources
             </button>
           )}
         </div>

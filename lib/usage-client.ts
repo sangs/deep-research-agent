@@ -84,5 +84,6 @@ export function formatResetTime(epochMs: number): string {
 export function blockedRunMessage(body: { error?: string; retryAfterSeconds?: number }): string | null {
   if (body.error === 'rate_limited') return `Too many requests. Try again in ${body.retryAfterSeconds ?? 60}s.`;
   if (body.error === 'budget_exceeded') return "Today's usage budget is used up. Raise today's limit from the usage meter, or wait for the reset at midnight.";
+  if (body.error === 'app_budget_exceeded') return "The app's shared daily budget is used up for today. Try again after midnight UTC.";
   return null;
 }

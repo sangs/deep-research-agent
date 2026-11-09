@@ -2,9 +2,11 @@ import type { Metadata } from "next";
 import { DM_Serif_Display, Plus_Jakarta_Sans, Geist_Mono } from "next/font/google";
 import { NavLinks } from "@/components/nav-links";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { LogOut } from "lucide-react";
+import { LogOut, Users } from "lucide-react";
+import Link from "next/link";
 import { signOut } from "@/auth";
-import { sessionUser } from "@/lib/user-id";
+import { isOwner, sessionUser } from "@/lib/user-id";
+import { AccountProvider } from "@/context/account-context";
 import { BudgetGateProvider } from "@/components/budget-gate";
 import { UsageBanner, UsageMeter } from "@/components/usage-meter";
 import { Toaster } from "@/components/ui/sonner";
@@ -38,8 +40,11 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  // Signed-out visitors only reach public pages (/privacy); they get no app navigation.
-  const signedIn = !!(await sessionUser());
+  // Signed-out, pending and suspended visitors only reach public pages and
+  // /access; they get no app navigation.
+  const user = await sessionUser();
+  const signedIn = !!user;
+  const owner = isOwner(user);
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
       <head>
@@ -52,6 +57,7 @@ export default async function RootLayout({
       <body
         className={`${dmSerifDisplay.variable} ${plusJakartaSans.variable} ${geistMono.variable} antialiased min-h-screen`}
       >
+        <AccountProvider isOwner={owner}>
         <SectionProvider>
           <BudgetGateProvider>
           <nav className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-md px-5 py-3 flex items-center justify-between">
@@ -68,6 +74,16 @@ export default async function RootLayout({
               <span className="hidden sm:inline text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Research Suite</span>
               {signedIn && <UsageMeter />}
               {signedIn && <NavLinks />}
+              {owner && (
+                <Link
+                  href="/admin"
+                  title="Users (owner)"
+                  aria-label="Users (owner)"
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Users className="h-4 w-4" />
+                </Link>
+              )}
               <ThemeToggle />
               {signedIn && (
               <form
@@ -93,6 +109,7 @@ export default async function RootLayout({
           <Toaster position="bottom-right" />
           </BudgetGateProvider>
         </SectionProvider>
+        </AccountProvider>
       </body>
     </html>
   );

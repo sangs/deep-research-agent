@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { BACKEND_URL, backendAuthHeaders } from '@/lib/backend-auth';
-import { sessionUserId } from '@/lib/user-id';
+import { isOwner, sessionUser } from '@/lib/user-id';
 import { guardRun, recordUsage, type UsageItem } from '@/lib/usage';
 
 // Large newsletter digests (month range, many senders) can take minutes to
@@ -67,11 +67,17 @@ function tapUsage(onDone: (usage: BackendUsageEvent | null) => void) {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const userId = await sessionUserId();
-  if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  const user = await sessionUser();
+  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  const userId = user.id;
   const body = await req.json();
   const tz: string = body.timezone ?? 'UTC';
   const feature = body.mode === 'newsletter' ? 'newsletter' : 'news';
+  // The only connected mailbox is the owner's until each user connects their
+  // own Gmail (design 14, Phase C).
+  if (feature === 'newsletter' && !isOwner(user)) {
+    return Response.json({ error: 'Newsletter is not available for your account yet' }, { status: 403 });
+  }
   const blocked = await guardRun(userId, tz, feature);
   if (blocked) return blocked;
 
@@ -86,7 +92,8 @@ export async function POST(req: Request): Promise<Response> {
   const upstream = await fetch(`${BACKEND_URL}/digest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
-    // user_id: charged for a newsletter background job (backend/services/ingest.py)
+    // user_id (from the session, overriding anything the client sent): whose
+    // source lists to search, and who is charged for a newsletter background job.
     body: JSON.stringify({ ...body, user_id: userId }),
     signal: req.signal,
   });

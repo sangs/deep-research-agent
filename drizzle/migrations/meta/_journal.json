@@ -50,6 +50,20 @@
       "when": 1792633354574,
       "tag": "0006_ingest_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793207771263,
+      "tag": "0007_per_user_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793207921314,
+      "tag": "0008_usage_events_created_idx",
+      "breakpoints": true
     }
   ]
 }

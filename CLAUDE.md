@@ -26,7 +26,9 @@ OPENROUTER_API_KEY=...
 EXA_API_KEY=...
 DATABASE_URL=...                 # Supabase Postgres (pooler)
 AUTH_GOOGLE_ID=...               # Google OAuth web client id (not a secret)
-AUTH_ALLOWED_EMAILS=a@x.com,...  # sign-in allowlist (app-level)
+AUTH_OWNER_EMAILS=a@x.com       # claims the migrated owner account at first sign-in (default: first AUTH_ALLOWED_EMAILS entry)
+AUTH_ALLOWED_EMAILS=a@x.com,...  # legacy allowlist: new accounts with these emails start active instead of pending
+# Optional: APP_DAILY_BUDGET_USD (all users, UTC day; default 10), AUTH_MAX_PENDING_REQUESTS (default 50)
 GCP_PROJECT_NUMBER=101419070755  # for Secret Manager reads
 # BACKEND_URL optional, defaults to http://localhost:8010
 ```
@@ -50,11 +52,23 @@ A Next.js 16 app (App Router) with two main sections:
 The News Hub calls a Python FastMCP + Starlette backend (Cloud Run in production); Deep Research calls a Next.js API route directly.
 
 ### Identity & access
-- **Users:** `proxy.ts` (Next 16's name for middleware) + `auth.ts` (Auth.js v5, Google provider) require an allowlisted sign-in
-  (`AUTH_ALLOWED_EMAILS`) for every page and API route except `/api/auth/*`. Pages redirect to sign-in; `/api/*` returns 401. Preview
-  deployments skip app sign-in (Vercel Authentication protects them).
-- **User id:** `lib/user-id.ts` `sessionUserId()` derives it server-side from the session. The app is single-tenant, so every allowlisted user
-  maps to one fixed id. Never trust a client-supplied user id (the old `X-User-Id` header is gone).
+The app is **private per user**: every user's history, digests, sources and usage are theirs alone; there is no sharing or
+invite concept. Design: `documents/architecture/features/14-per-user-data-isolation-design-2026-10-27.md` (Phase A built;
+B = Postgres RLS + signed backend assertion + isolation tests; C = each user connects their own Gmail).
+- **Sign-in & approval:** `auth.ts` (Auth.js v5, Google) → `lib/users.ts` `resolveSignIn`. Identity is keyed by Google `sub`
+  (`user_identities`), not email. An unknown verified Google account becomes a `pending` user; the owner approves it (or
+  pre-approves an email) at `/admin`. Statuses: `pending` | `active` | `suspended`; roles: `owner` | `member` | `system`
+  (the newsletter sweeps' cost account, never signs in). Every access change is written to `audit_log`.
+- **Gate:** `proxy.ts` (Next 16's name for middleware) runs the `authorized` callback for every page and API route except
+  `/api/auth/*` and `/privacy`: no session → sign-in (API 401); pending/suspended → `/access` (API 403 `access_pending|suspended`).
+  Status is read through `getUserAccess` (cached 30 s per instance). Preview deployments skip app sign-in and act as the owner.
+- **User id:** `lib/user-id.ts` `sessionUser()` / `sessionUserId()` return the **active** user from the session (null otherwise);
+  `isOwner(user)` for owner-only routes. Every personal query filters on this id; by-id routes return 404 for other users' rows.
+  Never trust a client-supplied user id.
+- **New personal tables** get `user_id` → `users.id` `ON DELETE CASCADE` and indexes leading with `user_id`.
+- **Owner-only today:** Newsletter (the only mailbox is the owner's), Gmail organize, background-summarizing controls,
+  provider balances, `/admin`. The UI reads the role from `context/account-context.tsx` (hint only; APIs check server-side).
+- **Spend:** per-user daily budget + rate limits (`lib/usage.ts`) plus an app-wide daily cap across all users.
 - **Workload (Vercel → backend):** the Cloud Run backend is **private** (`run.invoker` = `vercel-invoker` only). `lib/backend-auth.ts` mints a
   Google ID token through `lib/gcp-wif.ts` (Vercel OIDC → STS → IAM Credentials), with no stored keys. Operators use
   `gcloud auth print-identity-token` or `gcloud run services proxy backend --region=us-central1`.
@@ -83,9 +97,9 @@ Digest cache + saved digests: /api/history/news[/list] → Supabase news_digests
 ### Source Management
 ```
 components/source-manager.tsx
-  → GET/POST /api/sources  (Next.js route, Drizzle directly; does NOT call the backend)
-    → Supabase curated_sources table (seed: supabase/seed.sql)
-backend reads the same table via asyncpg (tools/news_tools.load_sources)
+  → GET/POST /api/sources  (Next.js route, Drizzle directly; scoped to the signed-in user)
+    → Supabase curated_sources (one copy per user, seeded from default_sources on activation)
+backend: tools/news_tools.load_sources(user_id) — the requesting user's lists; no user (MCP) → default_sources
 ```
 
 ## Key Files
@@ -94,7 +108,9 @@ backend reads the same table via asyncpg (tools/news_tools.load_sources)
 - `app/page.tsx` — Dual-section layout; research session id + history drawer wiring.
 - `auth.ts`, `proxy.ts`, `app/api/auth/[...nextauth]/route.ts` — sign-in and the access gate (see Identity & access).
 - `lib/gcp-wif.ts` — shared Workload Identity Federation steps; `lib/backend-auth.ts` (ID tokens for Cloud Run), `lib/gcp-secrets.ts` (Secret Manager reads).
-- `lib/auth-allowlist.ts`, `lib/user-id.ts` — allowlist check, preview detection, server-side user id.
+- `lib/users.ts` — users, sign-in resolution, access cache, owner actions (approve/reject/suspend/reactivate/pre-approve), audit log.
+- `lib/user-id.ts` — server-side session user (`sessionUser`, `isOwner`); `lib/auth-allowlist.ts` — bootstrap env vars, preview detection.
+- `app/access/page.tsx` — pending / suspended landing page. `app/admin/page.tsx` + `app/api/admin/users` — owner console (accounts + spend only).
 - `app/api/research/route.ts` — Deep Research agentic loop. Uses `streamText` with `stopWhen: stepCountIs(10)`. Model: `~google/gemini-flash-latest` via OpenRouter.
 - `app/api/news/route.ts` — Proxies News Hub requests to the backend `/digest` with a Bearer ID token; failures become an SSE `error` event.
 - `app/api/sources/route.ts` — Curated source CRUD directly against Supabase (Drizzle).
@@ -119,13 +135,14 @@ backend reads the same table via asyncpg (tools/news_tools.load_sources)
 - `services/ingest.py` + `jobs/ingest.py` — Newsletter background summarizing: runs with > 40 unsummarized emails queue an `ingest_jobs` row and start the Cloud Run Job `newsletter-ingest` (`python -m jobs.ingest`); Cloud Scheduler also starts it every 30 min. Locally (no `INGEST_JOB_NAME`) the worker runs in-process. Owner pause switch: `app_settings`.
 - `services/exa_client.py` — Exa search + contents fetching, with domain allowlists, date filters and excerpt cleaning.
 - `services/openrouter.py` — `run_news_agent`: OpenRouter tool-calling loop; the LLM returns article IDs and Python assembles the digest.
-- `tools/news_tools.py` — `load_sources`/`persist_sources` (Supabase `curated_sources`) and the `@mcp.tool` functions.
+- `tools/news_tools.py` — `load_sources(user_id)` (per-user `curated_sources`, or `default_sources` for MCP) and the `@mcp.tool` functions (`list_sources` is read-only).
+- `services/users.py` — `owner_user_id()` for owner-only newsletter work with no requesting user (scheduled sweeps).
 - `tools/date_utils.py` — Converts time range labels (today/yesterday/past week/past month) to timezone-aware date filters (`resolve_date_range`). Also houses `resolve_tz` (shared IANA-timezone-with-UTC-fallback resolver), `format_header_date` (RFC 2822 email header → reader-timezone `YYYY-MM-DD`), and `now_iso()` (current-instant timestamp helper) — the single home for all backend date/time logic.
 - `models/schemas.py` — Pydantic request/response models. `ArticleItem` includes `links: list[str] = []` (newsletter-only; safe default for other tabs).
 - `services/gmail_service.py` — Gmail OAuth + newsletter digest. Fetches emails, clusters by topic via LLM, summarizes with structured headline+bullets format, and populates `links` with up to 5 deduplicated article URLs per email.
 - `services/db.py` — asyncpg pool (`statement_cache_size=0` for Supabase PgBouncer).
 - `scripts/refresh_gmail_token.sh` — one-command Gmail token renewal for Cloud Run (config in gitignored `scripts/refresh_gmail_token.env`).
-- `config/default_sources.json` — legacy, unreferenced by code (sources live in Supabase).
+- `config/default_sources.json` — legacy, unreferenced by code (defaults live in the `default_sources` table).
 
 ## Code Conventions
 

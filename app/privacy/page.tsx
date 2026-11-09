@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   title: 'Privacy Policy — Research Suite',
 };
 
-const UPDATED = '2026-10-27';
+const UPDATED = '2026-10-28';
 const CONTACT = process.env.NEXT_PUBLIC_PRIVACY_CONTACT ?? 'the app owner';
 
 export default function PrivacyPage() {
@@ -20,8 +20,9 @@ export default function PrivacyPage() {
       <section className="space-y-2">
         <h2 className="text-base font-semibold">Who this app is for</h2>
         <p>
-          Research Suite is a personal app run by its owner for their own use and a small number of people they allow. It is not
-          offered to the public. Signing in requires a Google account on the owner&apos;s allowlist.
+          Research Suite is a small private app run by its owner. It is not offered to the public: anyone can sign in with a
+          Google account to request access, and the owner approves each account. Every account is private: your research,
+          digests, sources and usage are visible only to you. The owner sees only who has an account and what it costs to run.
         </p>
       </section>
 
@@ -29,8 +30,8 @@ export default function PrivacyPage() {
         <h2 className="text-base font-semibold">What data it uses</h2>
         <ul className="list-disc pl-5 space-y-1">
           <li>
-            <strong>Google sign-in:</strong> your email address and name, only to check that you are allowed in and to keep you
-            signed in (a session cookie).
+            <strong>Google sign-in:</strong> your email address, name and Google account id, only to identify your account,
+            check that it is approved, and keep you signed in (a session cookie).
           </li>
           <li>
             <strong>Gmail (the owner&apos;s inbox only):</strong> with the owner&apos;s permission (scope <code>gmail.modify</code>), the
@@ -53,7 +54,8 @@ export default function PrivacyPage() {
           </li>
           <li>
             <strong>Storage:</strong> email summaries (sender, subject, date, preview, links, summary), saved digests, research
-            sessions and usage costs are stored in a Supabase (PostgreSQL) database. The app runs on Vercel and Google Cloud;
+            sessions, your source lists and usage costs are stored in a Supabase (PostgreSQL) database, each tied to your
+            account and never shown to other users. The app runs on Vercel and Google Cloud;
             credentials are kept in Google Cloud Secret Manager.
           </li>
           <li>Data is not sold, not used for advertising, and not shared with anyone else.</li>

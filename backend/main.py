@@ -52,7 +52,8 @@ async def digest_endpoint(request: Request) -> Response:
     # Custom date range (only used when time_range == 'custom')
     start_date = body.get('start_date') or None
     end_date   = body.get('end_date') or None
-    # Set by the Next.js proxy from the session (the backend is private, only it can call)
+    # Set by the Next.js proxy from the session (the backend is private, only it can call):
+    # whose source lists to search and who is charged for a newsletter background job.
     requested_by = body.get('user_id') or None
 
     async def event_stream():
@@ -98,6 +99,7 @@ async def digest_endpoint(request: Request) -> Response:
                         conversation_history=conversation_history,
                         emit_event=emit,
                         tz_name=tz_name,
+                        user_id=requested_by,
                     )
                 if digest is not None:  # None: newsletter summarizing handed to the background job
                     await queue.put({'type': 'digest', **digest.model_dump()})
