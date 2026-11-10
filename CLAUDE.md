@@ -215,4 +215,6 @@ Installed components: `button`, `badge`, `card`, `select`, `sheet`, `tabs`, `tog
 
 - Active branch: `feature-initial-research`
 - Main branch: `main`
-- `documents/` is gitignored — test run logs stay local only. (`Notes/` was merged into `documents/` on 2026-07-20; it no longer exists as a separate directory.)
+- `documents/` is gitignored here and is its **own git repository**, `deep-research-agent-doc` (design notes, runbooks,
+  test and daily logs). Never put credentials or secrets in it: its `.gitignore` blocks credential files and its
+  pre-commit hook (`git config core.hooksPath .githooks`) refuses credential-like values. (`Notes/` was merged into `documents/` on 2026-07-20; it no longer exists as a separate directory.)
