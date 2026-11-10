@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { BACKEND_URL, backendAuthHeaders } from '@/lib/backend-auth';
 import { userAssertionHeaders } from '@/lib/user-assertion';
-import { isOwner, sessionUser } from '@/lib/user-id';
+import { isOwner, sessionUser, type SessionUser } from '@/lib/user-id';
 
 /** Forwards an owner-only request to a private backend path with the signed
  *  user assertion; the backend takes the actor (audit trail) and the owner check from it.
@@ -39,4 +39,21 @@ export async function forwardOwnerRequest(
     return NextResponse.json({ error: 'The backend is unavailable. Try again shortly.' }, { status: 502 });
   }
   return new Response(upstream.body, { status: upstream.status, headers: { 'Content-Type': 'application/json' } });
+}
+
+/** Server-side call to the backend as `user` (signed assertion), e.g. from the
+ *  Gmail OAuth callback or a server action. Returns the parsed JSON and status. */
+export async function callBackendAsUser(
+  user: SessionUser,
+  backendPath: string,
+  body: object,
+  req?: Request,
+): Promise<{ status: number; data: Record<string, unknown> }> {
+  const headers = { ...(await backendAuthHeaders(req, BACKEND_URL)), ...(await userAssertionHeaders(user)) };
+  const res = await fetch(`${BACKEND_URL}${backendPath}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, data: await res.json().catch(() => ({})) };
 }

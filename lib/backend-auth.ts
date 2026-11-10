@@ -21,7 +21,7 @@ const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 /** Authorization header for calls to the Cloud Run backend at `audience`
  *  (its base URL). Returns {} when Workload Identity Federation isn't configured. */
-export async function backendAuthHeaders(req: Request, audience: string): Promise<Record<string, string>> {
+export async function backendAuthHeaders(req: Request | undefined, audience: string): Promise<Record<string, string>> {
   const providerAudience = wifProviderAudience();
   const serviceAccountEmail = process.env.GCP_SERVICE_ACCOUNT_EMAIL;
   if (!providerAudience || !serviceAccountEmail) return {};
