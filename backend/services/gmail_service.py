@@ -10,7 +10,12 @@ Key differences from the original CLI tool:
   - Fully async-compatible (sync Gmail API calls wrapped in asyncio.to_thread)
   - Returns NewsDigest Pydantic model — same schema as all other News Hub tabs
 
-Auth setup (one-time local step):
+Phase C (design 15): every run uses the requesting user's own connected mailbox
+(services/mailboxes.py; refresh token envelope-encrypted with Cloud KMS). The
+single-token loader get_gmail_service() below is legacy: the app no longer calls
+it; it stays for backend/scripts/refresh_gmail_token.sh (kept as a fallback).
+
+Legacy auth setup (one-time local step, refresh script only):
   1. Download credentials.json from Google Cloud Console → APIs & Services → Credentials
      (OAuth 2.0 Client ID, type: Desktop app)
   2. Set GMAIL_CREDENTIALS_PATH in .env.local (default: ~/credentials.json)
@@ -52,7 +57,8 @@ from tools.date_utils import resolve_date_range, format_header_date, format_rang
 from tools.news_tools import load_sources
 from services.llm import chat_completion, describe_llm_error
 from services.gmail_organizer import ensure_label, add_label
-from services import ingest, newsletter_store
+from services import ingest, mailboxes, newsletter_store
+from services.mailboxes import Mailbox, MailboxError
 
 load_dotenv()
 
@@ -115,25 +121,30 @@ def _token_path() -> Path:
 # AUTH
 # ═══════════════════════════════════════════════════════════════════════════
 
-GMAIL_TOKEN_FIX = 'run backend/scripts/refresh_gmail_token.sh'
+GMAIL_RECONNECT_FIX = 'reconnect Gmail on the Account page'
 
 
 def describe_gmail_error(exc: Exception) -> str:
     """Plain-language reason for a Gmail failure, with the fix when there is one.
 
-    The usual one is an expired refresh token: the OAuth app is in Google's
-    "Testing" mode, which expires refresh tokens after 7 days (doc 10).
+    The usual one is a revoked grant (the user removed the app's access at
+    Google, or changed their password): the mailbox then needs reconnecting.
     """
     text = str(exc)
+    if isinstance(exc, MailboxError):
+        return text
     if 'invalid_grant' in text or type(exc).__name__ == 'RefreshError':
-        return f'Gmail access has expired (the sign-in token was revoked or is older than 7 days). To fix: {GMAIL_TOKEN_FIX}.'
+        return f'Gmail access was removed or has expired. To fix: {GMAIL_RECONNECT_FIX}.'
     if isinstance(exc, FileNotFoundError):
         return text
     return f'Gmail request failed ({type(exc).__name__}: {text[:200]})'
 
 
 def get_gmail_service():
-    """Return an authenticated Gmail API service object.
+    """LEGACY (before Phase C): the single owner token. Used only by
+    scripts/refresh_gmail_token.sh; the app uses mailboxes.gmail_service(mailbox).
+
+    Return an authenticated Gmail API service object.
 
     Auth resolution order (first match wins):
       1. GMAIL_TOKEN_JSON env var — JSON string of the token (Railway / production)
@@ -846,6 +857,7 @@ async def run_gmail_digest(
     start_date: str | None = None,
     end_date: str | None = None,
     requested_by: str | None = None,
+    mailbox: Mailbox | None = None,
 ) -> NewsDigest | None:
     """Fetch, summarize and cluster Gmail newsletter emails into a NewsDigest.
 
@@ -871,6 +883,7 @@ async def run_gmail_digest(
                      to start_date (single-day digest) when omitted.
         requested_by: User id charged for a background job; None (e.g. MCP
                      callers) always summarizes inline.
+        mailbox:     The requesting user's connected mailbox (services/mailboxes.py).
 
     Returns:
         NewsDigest with mode='newsletter', topics populated from email clusters,
@@ -893,7 +906,9 @@ async def run_gmail_digest(
         await emit_event({'type': 'searching', 'query': 'Connecting to Gmail…'})
 
     try:
-        service = await asyncio.to_thread(get_gmail_service)
+        if mailbox is None:
+            raise MailboxError('not_connected', 'Connect your Gmail first.', 409)
+        service = await mailboxes.gmail_service(mailbox)
     except Exception as e:
         if emit_event:
             await emit_event({'type': 'error', 'message': describe_gmail_error(e)})
@@ -903,8 +918,7 @@ async def run_gmail_digest(
     effective_senders = senders or []
     if not effective_senders:
         try:
-            from services.users import owner_user_id
-            sources = await load_sources(requested_by or await owner_user_id())
+            sources = await load_sources(mailbox.user_id)
             effective_senders = sources.get('newsletters', [])
             if not effective_senders:
                 if emit_event:
@@ -946,7 +960,7 @@ async def run_gmail_digest(
     # only emails without a current stored summary are fetched and summarized.
     store_ok = True
     try:
-        stored = await newsletter_store.load_emails(ids, SUMMARY_VERSION)
+        stored = await newsletter_store.load_emails(mailbox, ids, SUMMARY_VERSION)
     except Exception as e:
         print(f'[newsletter] summary store unavailable ({type(e).__name__}: {e}); summarizing every email')
         stored, store_ok = {}, False
@@ -957,7 +971,7 @@ async def run_gmail_digest(
     # ── Step 4b: Too many to summarize within the request → background job ──
     if requested_by and store_ok and len(new_ids) > ingest.INLINE_SUMMARY_LIMIT:
         try:
-            job = await ingest.request_job(new_ids, requested_by, tz_name)
+            job = await ingest.request_job(mailbox, new_ids, requested_by, tz_name)
         except Exception as e:
             print(f'[newsletter] could not queue a background job ({type(e).__name__}: {e}); summarizing inline')
         else:
@@ -996,7 +1010,7 @@ async def run_gmail_digest(
         e['summary'] = new_summaries.get(idx)
     if store_ok:
         try:
-            await newsletter_store.save_emails(fetched, SUMMARY_VERSION)
+            await newsletter_store.save_emails(mailbox, fetched, SUMMARY_VERSION)
             await newsletter_store.purge_expired()
         except Exception as e:
             print(f'[newsletter] could not store summaries ({type(e).__name__}: {e}); they will be redone next run')

@@ -56,9 +56,13 @@ async def digest_endpoint(request: Request, user: AssertedUser) -> Response:
         return Response('{"error":"invalid json"}', status_code=400, media_type='application/json')
 
     mode = body.get('mode', 'general')
-    # The only connected mailbox is the owner's until Phase C.
-    if mode == 'newsletter' and not user.is_owner:
-        return JSONResponse({'error': 'owner only'}, status_code=403)
+    mailbox = None
+    if mode == 'newsletter':  # the requesting user's own connected Gmail (Phase C)
+        from services.mailboxes import MailboxError, require_active
+        try:
+            mailbox = await require_active(user.id)
+        except MailboxError as e:
+            return JSONResponse({'error': str(e), 'code': e.code}, status_code=e.http_status)
     time_range = body.get('time_range', 'today')
     region = body.get('region') or None
     custom_domains = body.get('custom_domains') or None
@@ -108,6 +112,7 @@ async def digest_endpoint(request: Request, user: AssertedUser) -> Response:
                         start_date=start_date,
                         end_date=end_date,
                         requested_by=requested_by,
+                        mailbox=mailbox,
                     )
                 else:
                     from services.openrouter import run_news_agent
@@ -152,45 +157,54 @@ async def digest_endpoint(request: Request, user: AssertedUser) -> Response:
 
 
 
-# ── Gmail organize endpoints (all writes go through services/gmail_organizer.py) ──
-# The backend is private (Cloud Run IAM); the Next.js /api/gmail proxy is the
-# only caller. Owner-only, checked on the signed assertion; actor = its email.
+# ── Gmail endpoints (Phase C: each user's own mailbox) ────────────────────────
+# All Gmail writes go through services/gmail_organizer.py. The backend is private
+# (Cloud Run IAM); the Next.js /api/gmail routes are the only callers. The user
+# (whose mailbox) and the actor come from the signed assertion only.
 async def _gmail_json(handler):
     from services.gmail_organizer import GmailGuardError
+    from services.mailboxes import MailboxError
     try:
         return JSONResponse(await handler())
     except GmailGuardError as e:
         return JSONResponse({'error': str(e)}, status_code=400)
+    except MailboxError as e:
+        return JSONResponse({'error': str(e), 'code': e.code}, status_code=e.http_status)
     except Exception as e:
         from services.gmail_service import describe_gmail_error
         return JSONResponse({'error': describe_gmail_error(e)}, status_code=502)
 
 
-@requires_user(owner_only=True)
+async def _user_gmail(user: AssertedUser):
+    from services.mailboxes import gmail_service, require_active
+    mailbox = await require_active(user.id)
+    return mailbox, await gmail_service(mailbox)
+
+
+@requires_user()
 async def gmail_labels_endpoint(request: Request, user: AssertedUser) -> Response:
-    from services.gmail_service import get_gmail_service
     from services.gmail_organizer import list_user_labels
 
     async def run():
-        service = await asyncio.to_thread(get_gmail_service)
+        _, service = await _user_gmail(user)
         return {'labels': await asyncio.to_thread(list_user_labels, service)}
     return await _gmail_json(run)
 
 
-@requires_user(owner_only=True)
+@requires_user()
 async def gmail_actions_endpoint(request: Request, user: AssertedUser) -> Response:
     from services.gmail_organizer import list_actions
+    from services.mailboxes import require_active
     limit = min(int(request.query_params.get('limit', '20')), 100)
 
     async def run():
-        return {'actions': await list_actions(limit)}
+        return {'actions': await list_actions(await require_active(user.id), limit)}
     return await _gmail_json(run)
 
 
-@requires_user(owner_only=True)
+@requires_user()
 async def gmail_apply_endpoint(request: Request, user: AssertedUser) -> Response:
     """POST {kind: 'move'|'label'|'organize', groups: [{label, message_ids}], move: bool, confirm_bulk?: bool}"""
-    from services.gmail_service import get_gmail_service
     from services.gmail_organizer import apply_groups
     body = await request.json()
 
@@ -200,33 +214,72 @@ async def gmail_apply_endpoint(request: Request, user: AssertedUser) -> Response
             for g in body.get('groups', []) if g.get('label')
         ]
         groups = [g for g in groups if g['message_ids']]
-        service = await asyncio.to_thread(get_gmail_service)
+        mailbox, service = await _user_gmail(user)
         return await apply_groups(
-            service, body.get('kind', 'label'), user.email, groups,
+            service, mailbox, body.get('kind', 'label'), user.email, groups,
             move=bool(body.get('move')), confirm_bulk=bool(body.get('confirm_bulk')),
         )
     return await _gmail_json(run)
 
 
-@requires_user(owner_only=True)
+@requires_user()
 async def gmail_undo_endpoint(request: Request, user: AssertedUser) -> Response:
     """POST {action_id}"""
-    from services.gmail_service import get_gmail_service
     from services.gmail_organizer import undo_action
     body = await request.json()
 
     async def run():
-        service = await asyncio.to_thread(get_gmail_service)
-        return await undo_action(service, body.get('action_id', ''), user.email)
+        mailbox, service = await _user_gmail(user)
+        return await undo_action(service, mailbox, body.get('action_id', ''), user.email)
     return await _gmail_json(run)
 
 
-# ── Newsletter background summarizing: owner controls (services/ingest.py) ──
-# Same trust model as the Gmail endpoints: owner-only on the signed assertion.
-@requires_user(owner_only=True)
+@requires_user()
+async def gmail_connect_endpoint(request: Request, user: AssertedUser) -> Response:
+    """POST {refresh_token, google_sub, email, scopes: [..], client_id} — from the app's
+    OAuth callback (app/api/gmail/oauth/callback) only. The mailbox is the asserted user's."""
+    from services.mailboxes import connect
+    body = await request.json()
+
+    async def run():
+        mailbox = await connect(
+            user.id, str(body.get('google_sub') or ''), str(body.get('email') or ''),
+            str(body.get('refresh_token') or ''), [str(x) for x in body.get('scopes') or []],
+            str(body.get('client_id') or ''),
+        )
+        return {'mailbox': {'id': mailbox.id, 'email': mailbox.email, 'status': mailbox.status}}
+    return await _gmail_json(run)
+
+
+@requires_user()
+async def gmail_disconnect_endpoint(request: Request, user: AssertedUser) -> Response:
+    """POST — revoke at Google and delete the stored access and email summaries (D4)."""
+    from services.mailboxes import disconnect
+
+    async def run():
+        return {'disconnected': await disconnect(user.id, user.id)}
+    return await _gmail_json(run)
+
+
+# ── Newsletter background summarizing (services/ingest.py) ──
+# Status: the user's own mailbox (owner: plus app-wide figures). The global
+# pause switch and "check now" are owner-only.
+@requires_user()
 async def ingest_status_endpoint(request: Request, user: AssertedUser) -> Response:
     from services import ingest
-    return JSONResponse(await ingest.status())
+    from services.mailboxes import require_active
+
+    from services.mailboxes import MailboxError
+
+    async def run():
+        try:
+            mailbox = await require_active(user.id)
+        except MailboxError:
+            if not user.is_owner:
+                raise
+            mailbox = None  # the owner's global controls work without a mailbox
+        return await ingest.status(mailbox, include_app=user.is_owner)
+    return await _gmail_json(run)
 
 
 @requires_user(owner_only=True)
@@ -236,12 +289,13 @@ async def ingest_settings_endpoint(request: Request, user: AssertedUser) -> Resp
     body = await request.json()
     if not isinstance(body.get('enabled'), bool):
         return JSONResponse({'error': 'enabled must be true or false'}, status_code=400)
-    return JSONResponse(await ingest.set_enabled(body['enabled'], user.email))
+    await ingest.set_enabled(body['enabled'], user.email)
+    return await ingest_status_endpoint(request)
 
 
 @requires_user(owner_only=True)
 async def ingest_run_endpoint(request: Request, user: AssertedUser) -> Response:
-    """POST — start a sweep now instead of waiting for the next slot."""
+    """POST — start a sweep of every mailbox now instead of waiting for the next slot."""
     from services import ingest
     if not (await ingest.get_settings())['enabled']:
         return JSONResponse({'error': 'Background summarizing is paused; turn it on first'}, status_code=409)
@@ -263,6 +317,8 @@ def create_app():
         Route('/gmail/actions', endpoint=gmail_actions_endpoint, methods=['GET']),
         Route('/gmail/apply', endpoint=gmail_apply_endpoint, methods=['POST']),
         Route('/gmail/undo', endpoint=gmail_undo_endpoint, methods=['POST']),
+        Route('/gmail/mailbox', endpoint=gmail_connect_endpoint, methods=['POST']),
+        Route('/gmail/mailbox/disconnect', endpoint=gmail_disconnect_endpoint, methods=['POST']),
         Route('/ingest/status', endpoint=ingest_status_endpoint, methods=['GET']),
         Route('/ingest/settings', endpoint=ingest_settings_endpoint, methods=['POST']),
         Route('/ingest/run', endpoint=ingest_run_endpoint, methods=['POST']),
