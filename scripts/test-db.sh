@@ -14,7 +14,10 @@ NAME="dra-rls-test"
 PORT="${TEST_DB_PORT:-54330}"
 IMAGE="${TEST_DB_IMAGE:-postgres:16-alpine}"
 PW="test-only-password"
-ADMIN_URL="postgres://postgres:${PW}@localhost:${PORT}/postgres"
+# Migrations run as `migrator`, shaped like Supabase's `postgres` role: CREATEROLE,
+# CREATEDB, BYPASSRLS and owner of the database, but NOT a superuser (a superuser
+# would hide statements that fail on Supabase, as NOSUPERUSER did on 2026-11-10).
+ADMIN_URL="postgres://migrator:${PW}@localhost:${PORT}/app"
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --rm --name "$NAME" -e POSTGRES_PASSWORD="$PW" -p "${PORT}:5432" "$IMAGE" >/dev/null
@@ -25,6 +28,13 @@ for _ in $(seq 1 60); do
   sleep 0.5
 done
 sleep 1 # the image restarts the server once after initdb
+for _ in $(seq 1 20); do
+  docker exec "$NAME" psql -U postgres -qc "select 1" >/dev/null 2>&1 && break
+  sleep 0.5
+done
+docker exec "$NAME" psql -U postgres -q \
+  -c "CREATE ROLE migrator LOGIN PASSWORD '${PW}' CREATEROLE CREATEDB BYPASSRLS NOSUPERUSER" \
+  -c "CREATE DATABASE app OWNER migrator"
 
 DATABASE_URL="$ADMIN_URL" npx drizzle-kit migrate >/dev/null
 APP_URL="$(scripts/db-app-login.sh "$ADMIN_URL")"

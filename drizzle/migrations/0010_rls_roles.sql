@@ -27,7 +27,9 @@ BEGIN
     CREATE ROLE app_login NOLOGIN NOINHERIT NOBYPASSRLS;
   END IF;
 END $$;--> statement-breakpoint
-ALTER ROLE app_login NOINHERIT NOBYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE;--> statement-breakpoint
+-- No NOSUPERUSER here: only a superuser may name that attribute (Supabase's postgres is not
+-- one), and a role created by a non-superuser can never be a superuser anyway.
+ALTER ROLE app_login NOINHERIT NOBYPASSRLS NOCREATEDB NOCREATEROLE;--> statement-breakpoint
 GRANT app_user TO app_login;--> statement-breakpoint
 GRANT app_worker TO app_login;--> statement-breakpoint
 GRANT USAGE ON SCHEMA public TO app_user, app_worker;--> statement-breakpoint
