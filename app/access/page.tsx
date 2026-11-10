@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { signOut } from '@/auth';
 import { cancelMyDeletion } from '@/app/account/actions';
@@ -30,7 +31,28 @@ function formatDay(ms: number): string {
 export default async function AccessPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const access = await sessionAccess();
   if (!access) redirect('/api/auth/signin');
-  if (access.status === 'active') redirect('/');
+  // An active account normally never reaches this page (the gate sends it to /).
+  // It can for a few seconds after an approval or a cancelled deletion, while the
+  // gate's status cache catches up: show a link instead of redirecting, which
+  // would bounce between / and /access until then.
+  if (access.status === 'active') {
+    return (
+      <main className="container mx-auto max-w-lg px-4 py-16">
+        <div className="rounded-xl border border-border/60 bg-card p-6 space-y-4">
+          <h1 className="text-xl font-semibold">You&apos;re all set</h1>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Your account is active. If the app sends you back here, wait a few seconds and try again.
+          </p>
+          <Link
+            href="/"
+            className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:opacity-90"
+          >
+            Continue to the app
+          </Link>
+        </div>
+      </main>
+    );
+  }
   const copy = COPY[access.status];
   const { error } = await searchParams;
   const selfRequested = access.status === 'deleting' && access.deletionRequestedBy === access.id;

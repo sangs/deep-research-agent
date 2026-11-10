@@ -88,8 +88,9 @@ export interface UserAccess {
   deletionRequestedBy: string | null;
 }
 
-/** A suspension takes effect on other server instances within this window. */
-const ACCESS_CACHE_MS = 30_000;
+/** A status change (approve, suspend, delete, cancel) reaches every server
+ *  instance, including proxy.ts's own copy of this module, within this window. */
+const ACCESS_CACHE_MS = 5_000;
 const accessCache = new Map<string, { value: UserAccess | null; expires: number }>();
 
 function forgetAccess(userId: string) {

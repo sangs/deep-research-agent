@@ -70,7 +70,7 @@ B = Postgres RLS + signed backend assertion + isolation tests; C = each user con
   (the newsletter sweeps' cost account, never signs in). Every access change is written to `audit_log`.
 - **Gate:** `proxy.ts` (Next 16's name for middleware) runs the `authorized` callback for every page and API route except
   `/api/auth/*` and `/privacy`: no session → sign-in (API 401); pending/suspended → `/access` (API 403 `access_pending|suspended`).
-  Status is read through `getUserAccess` (cached 30 s per instance). Statuses `pending` | `active` | `suspended` | `deleting`.
+  Status is read through `getUserAccess` (cached 5 s per instance; proxy.ts has its own copy). Statuses `pending` | `active` | `suspended` | `deleting`.
   Preview deployments skip app sign-in and act as the owner.
 - **User id:** `lib/user-id.ts` `sessionUser()` / `sessionUserId()` return the **active** user from the session (null otherwise);
   `isOwner(user)` for owner-only routes. Every personal query filters on this id; by-id routes return 404 for other users' rows.

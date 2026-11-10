@@ -27,5 +27,7 @@ export async function cancelMyDeletion(): Promise<void> {
   if (!access) redirect('/');
   const error = await cancelOwnDeletion(access.id);
   if (error) redirect(`/access?error=${encodeURIComponent(error)}`);
-  redirect('/');
+  // /access shows "You're all set" for an active account; the sign-in gate
+  // may still hold the old status for a few seconds.
+  redirect('/access');
 }
