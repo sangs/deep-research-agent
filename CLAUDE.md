@@ -16,7 +16,13 @@ npx shadcn@latest add <component>  # Add a new shadcn/ui component
 cd backend && uv run uvicorn main:app --reload --port 8010  # FastMCP + Starlette backend (http://localhost:8010)
 ```
 
-Both servers must be running for the full app to work. There are no tests in this project.
+Both servers must be running for the full app to work.
+
+```bash
+npm run test:isolation   # scripts/test-db.sh: fresh `rls_test` DB in Docker `dra-local-db`, all migrations, app_login, then vitest
+npm test                 # vitest only (database tests skip without TEST_ADMIN_DATABASE_URL + APP_DATABASE_URL)
+cd backend && uv run python -m unittest discover -s tests   # backend tests (also run in the image build)
+```
 
 ## Environment
 
@@ -24,7 +30,9 @@ Both servers must be running for the full app to work. There are no tests in thi
 ```
 OPENROUTER_API_KEY=...
 EXA_API_KEY=...
-DATABASE_URL=...                 # Supabase Postgres (pooler)
+DATABASE_URL=...                 # Supabase Postgres as `postgres`: migrations (drizzle-kit) only, never the app
+# APP_DATABASE_URL=...           # optional: app_login URL; otherwise read from Secret Manager `app-database-url`
+# USER_ASSERTION_PRIVATE_KEY=... # optional: Ed25519 PKCS#8 PEM; otherwise Secret Manager `backend-user-assertion-key`
 AUTH_GOOGLE_ID=...               # Google OAuth web client id (not a secret)
 AUTH_OWNER_EMAILS=a@x.com       # claims the migrated owner account at first sign-in (default: first AUTH_ALLOWED_EMAILS entry)
 AUTH_ALLOWED_EMAILS=a@x.com,...  # legacy allowlist: new accounts with these emails start active instead of pending
@@ -37,7 +45,8 @@ The Google OAuth **client secret** and the Auth.js **session key** are never in 
 (`auth-google-client-secret`, `auth-session-secret`) and are read at runtime by `lib/gcp-secrets.ts`: locally with your
 `gcloud` login, on Vercel through Workload Identity Federation as `vercel-auth-reader`.
 
-The backend reads `OPENROUTER_API_KEY`, `EXA_API_KEY`, `DATABASE_URL` (and on Cloud Run `GMAIL_TOKEN_JSON`) from `backend/.env` / Secret Manager.
+The backend reads `OPENROUTER_API_KEY`, `EXA_API_KEY`, `DATABASE_URL` (the **app_login** URL; on Cloud Run the secret
+`app-database-url`), `USER_ASSERTION_PUBLIC_KEY` (Ed25519 public key, PEM) and on Cloud Run `GMAIL_TOKEN_JSON`.
 
 Vercel (Production + Preview) additionally has `BACKEND_URL`, `GCP_WORKLOAD_IDENTITY_POOL_ID=vercel`,
 `GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID=vercel-oidc`, `GCP_SERVICE_ACCOUNT_EMAIL` (vercel-invoker) and `GCP_AUTH_READER_SA_EMAIL` (vercel-auth-reader).
@@ -61,11 +70,24 @@ B = Postgres RLS + signed backend assertion + isolation tests; C = each user con
   (the newsletter sweeps' cost account, never signs in). Every access change is written to `audit_log`.
 - **Gate:** `proxy.ts` (Next 16's name for middleware) runs the `authorized` callback for every page and API route except
   `/api/auth/*` and `/privacy`: no session → sign-in (API 401); pending/suspended → `/access` (API 403 `access_pending|suspended`).
-  Status is read through `getUserAccess` (cached 30 s per instance). Preview deployments skip app sign-in and act as the owner.
+  Status is read through `getUserAccess` (cached 5 s per instance; proxy.ts has its own copy). Statuses `pending` | `active` | `suspended` | `deleting`.
+  Preview deployments skip app sign-in and act as the owner.
 - **User id:** `lib/user-id.ts` `sessionUser()` / `sessionUserId()` return the **active** user from the session (null otherwise);
   `isOwner(user)` for owner-only routes. Every personal query filters on this id; by-id routes return 404 for other users' rows.
   Never trust a client-supplied user id.
-- **New personal tables** get `user_id` → `users.id` `ON DELETE CASCADE` and indexes leading with `user_id`.
+- **Database access (Phase B):** the app and backend log in as `app_login`, which has **no table access of its own**.
+  Every query runs inside `withUser(userId, tx => …)` / `withWorker(reason, tx => …)` (`lib/db-access.ts`) or
+  `user_conn()` / `worker_conn()` (`backend/services/db.py`), which switch to `app_user` (row security on
+  `app.user_id`) or `app_worker` (narrow cross-user work; cannot read research, digests or sources). Never import
+  `drizzle/db.ts` elsewhere (`tests/db-access-boundary.test.ts` fails). Roles and policies: `drizzle/migrations/0010_rls_roles.sql`.
+- **New tables** need, in their migration: `ENABLE` + `FORCE ROW LEVEL SECURITY`, explicit `GRANT`s to `app_user` and/or
+  `app_worker`, and policies (no grant = permission denied). Personal tables get `user_id` → `users.id` `ON DELETE CASCADE`,
+  indexes leading with `user_id`, an `app_user` policy on `app.user_id`, and a case in `tests/isolation.test.ts`.
+- **Backend identity:** `/api/news` and the owner proxies send `X-User-Assertion` (5-min EdDSA JWT, `lib/user-assertion.ts`);
+  the backend (`services/user_assertion.py`, `requires_user` in `main.py`) takes the user, role and actor only from it.
+- **Account lifecycle:** `/account` (export JSON, delete) and `/admin` (delete member). Deletion is scheduled: status
+  `deleting`, purged after 30 days by `purge_deleted_accounts()` (migration 0011, run by the background job), which also
+  removes emails from `audit_log`. `audit_log` is kept 1 year. Policy: design doc 14 §8, `/privacy#deletion`.
 - **Owner-only today:** Newsletter (the only mailbox is the owner's), Gmail organize, background-summarizing controls,
   provider balances, `/admin`. The UI reads the role from `context/account-context.tsx` (hint only; APIs check server-side).
 - **Spend:** per-user daily budget + rate limits (`lib/usage.ts`) plus an app-wide daily cap across all users.

@@ -19,6 +19,23 @@ from starlette.middleware.cors import CORSMiddleware
 
 from tools.news_tools import register_tools
 from services.usage import start_tracking
+from services.user_assertion import AssertedUser, AssertionError_, from_request
+
+
+def requires_user(owner_only: bool = False):
+    """Endpoint decorator: verify the signed user assertion (design 14 §5.3) and
+    pass the user to the handler. Identity never comes from the request body."""
+    def deco(handler):
+        async def endpoint(request: Request) -> Response:
+            try:
+                user = from_request(request)
+            except AssertionError_ as e:
+                return JSONResponse({'error': str(e)}, status_code=401)
+            if owner_only and not user.is_owner:
+                return JSONResponse({'error': 'owner only'}, status_code=403)
+            return await handler(request, user)
+        return endpoint
+    return deco
 
 
 # ── FastMCP app ──────────────────────────────────────────────────────────────
@@ -27,7 +44,8 @@ register_tools(mcp)
 
 
 # ── Streaming /digest endpoint ────────────────────────────────────────────────
-async def digest_endpoint(request: Request) -> Response:
+@requires_user()
+async def digest_endpoint(request: Request, user: AssertedUser) -> Response:
     """SSE streaming endpoint for the Next.js UI.
     POST /digest { mode, time_range, region?, custom_domains? }
     Streams: searching / results / digest / done / error events.
@@ -38,6 +56,9 @@ async def digest_endpoint(request: Request) -> Response:
         return Response('{"error":"invalid json"}', status_code=400, media_type='application/json')
 
     mode = body.get('mode', 'general')
+    # The only connected mailbox is the owner's until Phase C.
+    if mode == 'newsletter' and not user.is_owner:
+        return JSONResponse({'error': 'owner only'}, status_code=403)
     time_range = body.get('time_range', 'today')
     region = body.get('region') or None
     custom_domains = body.get('custom_domains') or None
@@ -52,9 +73,9 @@ async def digest_endpoint(request: Request) -> Response:
     # Custom date range (only used when time_range == 'custom')
     start_date = body.get('start_date') or None
     end_date   = body.get('end_date') or None
-    # Set by the Next.js proxy from the session (the backend is private, only it can call):
-    # whose source lists to search and who is charged for a newsletter background job.
-    requested_by = body.get('user_id') or None
+    # From the signed assertion only: whose source lists to search and who is
+    # charged for a newsletter background job.
+    requested_by = user.id
 
     async def event_stream():
         # Events are pushed onto a queue by the pipeline (running as a
@@ -133,7 +154,7 @@ async def digest_endpoint(request: Request) -> Response:
 
 # ── Gmail organize endpoints (all writes go through services/gmail_organizer.py) ──
 # The backend is private (Cloud Run IAM); the Next.js /api/gmail proxy is the
-# only caller, restricts it to the owner, and supplies `actor` from the session.
+# only caller. Owner-only, checked on the signed assertion; actor = its email.
 async def _gmail_json(handler):
     from services.gmail_organizer import GmailGuardError
     try:
@@ -145,7 +166,8 @@ async def _gmail_json(handler):
         return JSONResponse({'error': describe_gmail_error(e)}, status_code=502)
 
 
-async def gmail_labels_endpoint(request: Request) -> Response:
+@requires_user(owner_only=True)
+async def gmail_labels_endpoint(request: Request, user: AssertedUser) -> Response:
     from services.gmail_service import get_gmail_service
     from services.gmail_organizer import list_user_labels
 
@@ -155,7 +177,8 @@ async def gmail_labels_endpoint(request: Request) -> Response:
     return await _gmail_json(run)
 
 
-async def gmail_actions_endpoint(request: Request) -> Response:
+@requires_user(owner_only=True)
+async def gmail_actions_endpoint(request: Request, user: AssertedUser) -> Response:
     from services.gmail_organizer import list_actions
     limit = min(int(request.query_params.get('limit', '20')), 100)
 
@@ -164,8 +187,9 @@ async def gmail_actions_endpoint(request: Request) -> Response:
     return await _gmail_json(run)
 
 
-async def gmail_apply_endpoint(request: Request) -> Response:
-    """POST {kind: 'move'|'label'|'organize', actor, groups: [{label, message_ids}], move: bool, confirm_bulk?: bool}"""
+@requires_user(owner_only=True)
+async def gmail_apply_endpoint(request: Request, user: AssertedUser) -> Response:
+    """POST {kind: 'move'|'label'|'organize', groups: [{label, message_ids}], move: bool, confirm_bulk?: bool}"""
     from services.gmail_service import get_gmail_service
     from services.gmail_organizer import apply_groups
     body = await request.json()
@@ -178,52 +202,54 @@ async def gmail_apply_endpoint(request: Request) -> Response:
         groups = [g for g in groups if g['message_ids']]
         service = await asyncio.to_thread(get_gmail_service)
         return await apply_groups(
-            service, body.get('kind', 'label'), body.get('actor', 'unknown'), groups,
+            service, body.get('kind', 'label'), user.email, groups,
             move=bool(body.get('move')), confirm_bulk=bool(body.get('confirm_bulk')),
         )
     return await _gmail_json(run)
 
 
-async def gmail_undo_endpoint(request: Request) -> Response:
-    """POST {action_id, actor}"""
+@requires_user(owner_only=True)
+async def gmail_undo_endpoint(request: Request, user: AssertedUser) -> Response:
+    """POST {action_id}"""
     from services.gmail_service import get_gmail_service
     from services.gmail_organizer import undo_action
     body = await request.json()
 
     async def run():
         service = await asyncio.to_thread(get_gmail_service)
-        return await undo_action(service, body.get('action_id', ''), body.get('actor', 'unknown'))
+        return await undo_action(service, body.get('action_id', ''), user.email)
     return await _gmail_json(run)
 
 
 # ── Newsletter background summarizing: owner controls (services/ingest.py) ──
-# Same trust model as the Gmail endpoints: only the Next.js proxy can call,
-# it restricts these to the owner and supplies `actor` from the session.
-async def ingest_status_endpoint(request: Request) -> Response:
+# Same trust model as the Gmail endpoints: owner-only on the signed assertion.
+@requires_user(owner_only=True)
+async def ingest_status_endpoint(request: Request, user: AssertedUser) -> Response:
     from services import ingest
     return JSONResponse(await ingest.status())
 
 
-async def ingest_settings_endpoint(request: Request) -> Response:
-    """POST {enabled: bool, actor}"""
+@requires_user(owner_only=True)
+async def ingest_settings_endpoint(request: Request, user: AssertedUser) -> Response:
+    """POST {enabled: bool}"""
     from services import ingest
     body = await request.json()
     if not isinstance(body.get('enabled'), bool):
         return JSONResponse({'error': 'enabled must be true or false'}, status_code=400)
-    return JSONResponse(await ingest.set_enabled(body['enabled'], body.get('actor', 'unknown')))
+    return JSONResponse(await ingest.set_enabled(body['enabled'], user.email))
 
 
-async def ingest_run_endpoint(request: Request) -> Response:
-    """POST {actor} — start a sweep now instead of waiting for the next slot."""
+@requires_user(owner_only=True)
+async def ingest_run_endpoint(request: Request, user: AssertedUser) -> Response:
+    """POST — start a sweep now instead of waiting for the next slot."""
     from services import ingest
-    body = await request.json()
     if not (await ingest.get_settings())['enabled']:
         return JSONResponse({'error': 'Background summarizing is paused; turn it on first'}, status_code=409)
     try:
         await ingest.start_execution(sweep=True)
     except Exception as e:
         return JSONResponse({'error': f'Could not start the job: {e}'}, status_code=502)
-    print(f'[ingest] sweep started now by {body.get("actor", "unknown")}')
+    print(f'[ingest] sweep started now by {user.email}')
     return JSONResponse({'ok': True})
 
 

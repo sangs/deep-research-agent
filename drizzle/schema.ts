@@ -8,11 +8,17 @@ export const users = pgTable('users', {
   email: text('email').notNull(), // lower-cased
   name: text('name'),
   role: text('role').notNull().default('member'), // 'owner' | 'member' | 'system' (newsletter sweeps' cost account; never signs in)
-  status: text('status').notNull().default('pending'), // 'pending' | 'active' | 'suspended'
+  status: text('status').notNull().default('pending'), // 'pending' | 'active' | 'suspended' | 'deleting'
   createdAt: bigint('created_at', { mode: 'number' }).notNull(), // epoch ms
   approvedAt: bigint('approved_at', { mode: 'number' }),
   approvedBy: text('approved_by'), // user id of the owner who approved
   lastLoginAt: bigint('last_login_at', { mode: 'number' }),
+  // Account deletion has a 30-day grace period (design 14 §8): status 'deleting'
+  // until purge_deleted_accounts() (migration 0011, run by the background job)
+  // removes the row and, by cascade, all of the user's data.
+  deletionRequestedAt: bigint('deletion_requested_at', { mode: 'number' }),
+  deletionRequestedBy: text('deletion_requested_by'), // user id: the member themselves or the owner
+  statusBeforeDeletion: text('status_before_deletion'), // restored if the deletion is cancelled
 }, (table) => [
   uniqueIndex('users_email_unique').on(table.email),
   index('users_status_created_idx').on(table.status, table.createdAt),
@@ -89,9 +95,7 @@ export const newsDigests = pgTable('news_digests', {
 // Each user's own source lists, seeded from default_sources on activation.
 export const curatedSources = pgTable('curated_sources', {
   id: text('id').primaryKey(),
-  // Default = the owner's id only so pre-multi-user code still inserting without
-  // user_id lands on the owner during the deploy switch-over; dropped in Phase B.
-  userId: ownerUserId().default('32087c9e-d37e-4b7c-896e-58da85f4d108'),
+  userId: ownerUserId(),
   domain: text('domain').notNull(),
   listType: text('list_type').notNull(), // 'news_sites' | 'research_sites' | 'newsletters' | 'global_news_sites'
   addedAt: bigint('added_at', { mode: 'number' }).notNull(),

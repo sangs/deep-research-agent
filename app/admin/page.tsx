@@ -17,20 +17,22 @@ interface AdminUser {
   email: string;
   name: string | null;
   role: 'owner' | 'member' | 'system';
-  status: 'pending' | 'active' | 'suspended';
+  status: 'pending' | 'active' | 'suspended' | 'deleting';
   createdAt: number;
   lastLoginAt: number | null;
   linked: boolean;
   spentTodayUsd: number;
   spent30dUsd: number;
+  deletionDueAt: number | null;
 }
 
-type Action = 'approve' | 'reject' | 'suspend' | 'reactivate';
+type Action = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete' | 'cancel_deletion';
 
 const STATUS_STYLE: Record<AdminUser['status'], string> = {
   pending: 'bg-[#fab219]/15 text-foreground border-[#fab219]/40',
   active: 'bg-[#0ca30c]/15 text-foreground border-[#0ca30c]/40',
   suspended: 'bg-muted text-muted-foreground border-border',
+  deleting: 'bg-[#d03b3b]/10 text-foreground border-[#d03b3b]/40',
 };
 
 function when(ms: number | null): string {
@@ -51,6 +53,7 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [email, setEmail] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch('/api/admin/users', { cache: 'no-store' });
@@ -197,6 +200,25 @@ export default function AdminPage() {
                     <td className="py-2.5 pr-3 text-right tabular-nums">{formatUsd(u.spentTodayUsd)}</td>
                     <td className="py-2.5 pr-3 text-right tabular-nums">{formatUsd(u.spent30dUsd)}</td>
                     <td className="py-2.5 text-right">
+                      {u.role === 'member' && confirmDelete === u.id ? (
+                        <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                          <span className="text-xs">Lock now and delete all its data in 30 days?</span>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={async () => {
+                              if (await act(u, 'delete')) setConfirmDelete(null);
+                            }}
+                            disabled={!!busy}
+                          >
+                            Delete
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(null)} disabled={!!busy}>
+                            Cancel
+                          </Button>
+                        </span>
+                      ) : (
+                      <span className="inline-flex gap-2 justify-end">
                       {u.role === 'member' && u.status === 'active' && (
                         <Button size="sm" variant="outline" onClick={() => act(u, 'suspend')} disabled={!!busy}>
                           Suspend
@@ -206,6 +228,23 @@ export default function AdminPage() {
                         <Button size="sm" variant="outline" onClick={() => act(u, 'reactivate')} disabled={!!busy}>
                           Reactivate
                         </Button>
+                      )}
+                      {u.role === 'member' && u.status === 'deleting' && (
+                        <>
+                          <span className="self-center text-xs text-muted-foreground">
+                            Deletes {u.deletionDueAt ? new Date(u.deletionDueAt).toLocaleDateString() : 'soon'}
+                          </span>
+                          <Button size="sm" variant="outline" onClick={() => act(u, 'cancel_deletion')} disabled={!!busy}>
+                            Cancel deletion
+                          </Button>
+                        </>
+                      )}
+                      {u.role === 'member' && (u.status === 'active' || u.status === 'suspended') && (
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(u.id)} disabled={!!busy}>
+                          Delete
+                        </Button>
+                      )}
+                      </span>
                       )}
                     </td>
                   </tr>

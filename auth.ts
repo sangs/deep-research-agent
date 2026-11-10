@@ -49,7 +49,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth(async () => {
         return session;
       },
       // Runs in proxy.ts for every matched request. Reads the user's current
-      // status (cached 30 s), so approval and suspension apply to live sessions.
+      // status (cached 5 s), so approval and suspension apply to live sessions.
       async authorized({ auth: session, request }) {
         if (isPreviewDeployment()) return true;
         const path = request.nextUrl.pathname;

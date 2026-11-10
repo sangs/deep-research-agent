@@ -8,12 +8,22 @@
 
 import { randomUUID } from 'crypto';
 import { and, desc, eq, gte, isNull, sql } from 'drizzle-orm';
-import { db } from '@/drizzle/db';
+import { withUser, withWorker, type Tx } from '@/lib/db-access';
 import { auditLog, curatedSources, defaultSources, userIdentities, users, usageEvents } from '@/drizzle/schema';
 import { isLegacyAllowedEmail, isOwnerBootstrapEmail } from '@/lib/auth-allowlist';
 
 export type Role = 'owner' | 'member' | 'system';
-export type AccessStatus = 'pending' | 'active' | 'suspended';
+export type AccessStatus = 'pending' | 'active' | 'suspended' | 'deleting';
+
+/** Days between a deletion request and the purge (design 14 §8). Must match
+ *  DELETION_GRACE_DAYS in backend/services/ingest.py, which runs the purge. */
+export const DELETION_GRACE_DAYS = 30;
+const DAY_MS = 86_400_000;
+
+/** When an account in status 'deleting' will be purged (epoch ms). */
+export function deletionDueAt(requestedAt: number): number {
+  return requestedAt + DELETION_GRACE_DAYS * DAY_MS;
+}
 
 /** The owner's id: kept from the single-tenant era so existing data needed no move. */
 export const OWNER_LEGACY_USER_ID = '32087c9e-d37e-4b7c-896e-58da85f4d108';
@@ -32,8 +42,7 @@ export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-type Executor = typeof db | Tx;
+type Executor = Tx;
 
 export type AuditAction =
   | 'sign_in'
@@ -43,7 +52,10 @@ export type AuditAction =
   | 'access_preapproved'
   | 'access_request_rejected'
   | 'access_suspended'
-  | 'access_reactivated';
+  | 'access_reactivated'
+  | 'account_deletion_requested'
+  | 'account_deletion_cancelled'
+  | 'account_deleted'; // written by purge_deleted_accounts() (migration 0011)
 
 export async function audit(
   ex: Executor,
@@ -72,10 +84,13 @@ export interface UserAccess {
   name: string | null;
   role: Role;
   status: AccessStatus;
+  deletionRequestedAt: number | null;
+  deletionRequestedBy: string | null;
 }
 
-/** A suspension takes effect on other server instances within this window. */
-const ACCESS_CACHE_MS = 30_000;
+/** A status change (approve, suspend, delete, cancel) reaches every server
+ *  instance, including proxy.ts's own copy of this module, within this window. */
+const ACCESS_CACHE_MS = 5_000;
 const accessCache = new Map<string, { value: UserAccess | null; expires: number }>();
 
 function forgetAccess(userId: string) {
@@ -85,11 +100,22 @@ function forgetAccess(userId: string) {
 export async function getUserAccess(userId: string): Promise<UserAccess | null> {
   const hit = accessCache.get(userId);
   if (hit && hit.expires > Date.now()) return hit.value;
-  const [row] = await db
-    .select({ id: users.id, email: users.email, name: users.name, role: users.role, status: users.status })
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
+  // As the user themselves: row security returns their own row only.
+  const [row] = await withUser(userId, (tx) =>
+    tx
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        role: users.role,
+        status: users.status,
+        deletionRequestedAt: users.deletionRequestedAt,
+        deletionRequestedBy: users.deletionRequestedBy,
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1),
+  );
   const value = row ? { ...row, role: row.role as Role, status: row.status as AccessStatus } : null;
   accessCache.set(userId, { value, expires: Date.now() + ACCESS_CACHE_MS });
   return value;
@@ -97,11 +123,13 @@ export async function getUserAccess(userId: string): Promise<UserAccess | null> 
 
 /** Internal user id linked to a Google account, or null. */
 export async function userIdForGoogleSubject(subject: string): Promise<string | null> {
-  const [row] = await db
-    .select({ userId: userIdentities.userId })
-    .from(userIdentities)
-    .where(and(eq(userIdentities.provider, PROVIDER), eq(userIdentities.subject, subject)))
-    .limit(1);
+  const [row] = await withWorker('sign_in', (tx) =>
+    tx
+      .select({ userId: userIdentities.userId })
+      .from(userIdentities)
+      .where(and(eq(userIdentities.provider, PROVIDER), eq(userIdentities.subject, subject)))
+      .limit(1),
+  );
   return row?.userId ?? null;
 }
 
@@ -115,7 +143,7 @@ export async function resolveSignIn(subject: string, rawEmail: string, name: str
   const email = normalizeEmail(rawEmail);
   const now = Date.now();
 
-  return db.transaction(async (tx) => {
+  return withWorker('sign_in', async (tx) => {
     // 1. Known Google account.
     const [linked] = await tx
       .select({ userId: userIdentities.userId })
@@ -200,50 +228,55 @@ export interface AdminUserRow {
   linked: boolean; // has signed in at least once (false: pre-approved, waiting)
   spentTodayUsd: number; // current UTC day
   spent30dUsd: number;
+  deletionDueAt: number | null; // status 'deleting': when the purge removes it
 }
 
 export async function listUsersForOwner(): Promise<AdminUserRow[]> {
   const now = Date.now();
   const startOfUtcDay = now - (now % 86_400_000);
-  const rows = await db
-    .select({
-      id: users.id,
-      email: users.email,
-      name: users.name,
-      role: users.role,
-      status: users.status,
-      createdAt: users.createdAt,
-      lastLoginAt: users.lastLoginAt,
-      linked: sql<boolean>`exists (select 1 from ${userIdentities} where ${userIdentities.userId} = ${users.id})`,
-    })
-    .from(users)
-    .orderBy(desc(users.createdAt));
-  const spend = await db
-    .select({
-      userId: usageEvents.userId,
-      today: sql<number>`coalesce(sum(${usageEvents.costUsd}) filter (where ${usageEvents.createdAt} >= ${startOfUtcDay}), 0)`,
-      last30: sql<number>`coalesce(sum(${usageEvents.costUsd}), 0)`,
-    })
-    .from(usageEvents)
-    .where(gte(usageEvents.createdAt, now - 30 * 86_400_000))
-    .groupBy(usageEvents.userId);
-  const byUser = new Map(spend.map((s) => [s.userId, s]));
-  return rows.map((r) => ({
-    ...r,
-    role: r.role as Role,
-    status: r.status as AccessStatus,
-    spentTodayUsd: Number(byUser.get(r.id)?.today ?? 0),
-    spent30dUsd: Number(byUser.get(r.id)?.last30 ?? 0),
-  }));
+  return withWorker('owner_console', async (tx) => {
+    const rows = await tx
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        role: users.role,
+        status: users.status,
+        createdAt: users.createdAt,
+        lastLoginAt: users.lastLoginAt,
+        deletionRequestedAt: users.deletionRequestedAt,
+        linked: sql<boolean>`exists (select 1 from ${userIdentities} where ${userIdentities.userId} = ${users.id})`,
+      })
+      .from(users)
+      .orderBy(desc(users.createdAt));
+    const spend = await tx
+      .select({
+        userId: usageEvents.userId,
+        today: sql<number>`coalesce(sum(${usageEvents.costUsd}) filter (where ${usageEvents.createdAt} >= ${startOfUtcDay}), 0)`,
+        last30: sql<number>`coalesce(sum(${usageEvents.costUsd}), 0)`,
+      })
+      .from(usageEvents)
+      .where(gte(usageEvents.createdAt, now - 30 * 86_400_000))
+      .groupBy(usageEvents.userId);
+    const byUser = new Map(spend.map((s) => [s.userId, s]));
+    return rows.map(({ deletionRequestedAt, ...r }) => ({
+      ...r,
+      deletionDueAt: deletionRequestedAt ? deletionDueAt(deletionRequestedAt) : null,
+      role: r.role as Role,
+      status: r.status as AccessStatus,
+      spentTodayUsd: Number(byUser.get(r.id)?.today ?? 0),
+      spent30dUsd: Number(byUser.get(r.id)?.last30 ?? 0),
+    }));
+  });
 }
 
-export type OwnerAction = 'approve' | 'reject' | 'suspend' | 'reactivate';
+export type OwnerAction = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete' | 'cancel_deletion';
 
 /** Apply an owner action to a member. Returns an error message, or null on success. */
 export async function applyOwnerAction(ownerId: string, targetId: string, action: OwnerAction): Promise<string | null> {
   if (targetId === ownerId) return 'You cannot change your own access';
   const now = Date.now();
-  const result = await db.transaction(async (tx) => {
+  const result = await withWorker('owner_console', async (tx) => {
     const [target] = await tx
       .select({ status: users.status, role: users.role })
       .from(users)
@@ -270,6 +303,15 @@ export async function applyOwnerAction(ownerId: string, targetId: string, action
       await audit(tx, 'access_suspended', ownerId, targetId);
       return null;
     }
+    if (action === 'delete' && (from === 'active' || from === 'suspended')) {
+      // Scheduled: the account is locked now and purged after the grace period.
+      await scheduleDeletion(tx, targetId, ownerId, from);
+      return null;
+    }
+    if (action === 'cancel_deletion' && from === 'deleting') {
+      await cancelDeletion(tx, targetId, ownerId);
+      return null;
+    }
     if (action === 'reactivate' && from === 'suspended') {
       await tx.update(users).set({ status: 'active' }).where(eq(users.id, targetId));
       await seedSources(tx, targetId); // no-op unless they never had sources (e.g. legacy placeholder)
@@ -287,7 +329,7 @@ export async function preapproveEmail(ownerId: string, rawEmail: string): Promis
   const email = normalizeEmail(rawEmail);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Enter a valid email address';
   const now = Date.now();
-  return db.transaction(async (tx) => {
+  return withWorker('owner_console', async (tx) => {
     const [existing] = await tx
       .select({ id: users.id, status: users.status })
       .from(users)
@@ -316,4 +358,63 @@ export async function preapproveEmail(ownerId: string, rawEmail: string): Promis
     await audit(tx, 'access_preapproved', ownerId, userId, { email });
     return null;
   });
+}
+
+// ── Account deletion (design 14 §8) ─────────────────────────────────────────
+// Deleting is two steps: a request locks the account at once (status
+// 'deleting': no sign-in to the app, no API access) and the background job's
+// purge_deleted_accounts() removes it, with all of its data, after
+// DELETION_GRACE_DAYS. Until then the requester can cancel.
+
+async function scheduleDeletion(tx: Tx, userId: string, requestedBy: string, from: AccessStatus) {
+  await tx
+    .update(users)
+    .set({ status: 'deleting', deletionRequestedAt: Date.now(), deletionRequestedBy: requestedBy, statusBeforeDeletion: from })
+    .where(eq(users.id, userId));
+  await audit(tx, 'account_deletion_requested', requestedBy, userId, {
+    by: requestedBy === userId ? 'self' : 'owner',
+    graceDays: DELETION_GRACE_DAYS,
+  });
+}
+
+async function cancelDeletion(tx: Tx, userId: string, cancelledBy: string) {
+  const [row] = await tx.select({ before: users.statusBeforeDeletion }).from(users).where(eq(users.id, userId)).limit(1);
+  const restored = row?.before === 'suspended' ? 'suspended' : 'active';
+  await tx
+    .update(users)
+    .set({ status: restored, deletionRequestedAt: null, deletionRequestedBy: null, statusBeforeDeletion: null })
+    .where(eq(users.id, userId));
+  await audit(tx, 'account_deletion_cancelled', cancelledBy, userId, { by: cancelledBy === userId ? 'self' : 'owner', restored });
+}
+
+/** A member asks to delete their own account. The owner account can't. Returns an error message, or null. */
+export async function requestOwnDeletion(userId: string): Promise<string | null> {
+  const result = await withWorker('account_delete', async (tx) => {
+    const [me] = await tx.select({ role: users.role, status: users.status }).from(users).where(eq(users.id, userId)).limit(1);
+    if (!me) return 'Account not found';
+    if (me.role !== 'member') return 'The owner account cannot be deleted here';
+    if (me.status !== 'active') return 'This account cannot be deleted right now';
+    await scheduleDeletion(tx, userId, userId, 'active');
+    return null;
+  });
+  forgetAccess(userId);
+  return result;
+}
+
+/** A member cancels a deletion they requested themselves (from /access). An
+ *  owner-requested deletion can only be cancelled by the owner. */
+export async function cancelOwnDeletion(userId: string): Promise<string | null> {
+  const result = await withWorker('account_delete', async (tx) => {
+    const [me] = await tx
+      .select({ status: users.status, by: users.deletionRequestedBy })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!me || me.status !== 'deleting') return 'This account is not scheduled for deletion';
+    if (me.by !== userId) return 'The owner scheduled this deletion; only the owner can cancel it';
+    await cancelDeletion(tx, userId, userId);
+    return null;
+  });
+  forgetAccess(userId);
+  return result;
 }
