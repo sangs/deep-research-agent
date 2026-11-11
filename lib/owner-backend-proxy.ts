@@ -3,9 +3,16 @@ import { BACKEND_URL, backendAuthHeaders } from '@/lib/backend-auth';
 import { userAssertionHeaders } from '@/lib/user-assertion';
 import { isOwner, sessionUser, type SessionUser } from '@/lib/user-id';
 
-/** Forwards an owner-only request to a private backend path with the signed
- *  user assertion; the backend takes the actor (audit trail) and the owner check from it.
- *  Used by /api/gmail/[op] and /api/newsletter/ingest/[op]. */
+/** Forwards a request to a private backend path with the signed user assertion;
+ *  the backend takes the user (whose mailbox), the actor (audit trail) and the
+ *  owner check from it. Used by /api/gmail/* and /api/newsletter/ingest/[op]. */
+export async function forwardUserRequest(req: Request, backendPath: string): Promise<Response> {
+  const user = await sessionUser();
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  return forward(req, backendPath, user);
+}
+
+/** As forwardUserRequest, refused here (and again by the backend) for non-owners. */
 export async function forwardOwnerRequest(
   req: Request,
   backendPath: string,
@@ -14,6 +21,10 @@ export async function forwardOwnerRequest(
   const user = await sessionUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!isOwner(user)) return NextResponse.json({ error: forbiddenMessage }, { status: 403 });
+  return forward(req, backendPath, user);
+}
+
+async function forward(req: Request, backendPath: string, user: SessionUser): Promise<Response> {
   let authHeaders: Record<string, string>;
   try {
     authHeaders = { ...(await backendAuthHeaders(req, BACKEND_URL)), ...(await userAssertionHeaders(user)) };

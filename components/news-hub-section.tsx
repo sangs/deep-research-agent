@@ -9,14 +9,17 @@ import { GmailOrganizeProvider } from '@/components/gmail-organize';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useAccount } from '@/context/account-context';
+import { GmailConnectCard } from '@/components/gmail-connect-card';
 
 
 type TabStatus = { status: string; count: number };
 type TabId = 'global' | 'regional' | 'curated' | 'research' | 'newsletter';
 
 export function NewsHubSection() {
-  // Newsletter reads the owner's Gmail until each user connects their own (design 14, Phase C).
-  const { isOwner: showNewsletter } = useAccount();
+  // Newsletter reads the user's own connected Gmail (design 15); shown once the
+  // owner has turned Gmail on for them, with a connect card until they connect.
+  const { gmail } = useAccount();
+  const showNewsletter = gmail.allowed;
   const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
   const [tabStatus, setTabStatus] = useState<Record<TabId, TabStatus>>({
     global: { status: 'idle', count: 0 },
@@ -151,15 +154,19 @@ export function NewsHubSection() {
 
           {showNewsletter && (
             <TabsContent value="newsletter" forceMount className="mt-0 border border-t-0 rounded-b-lg min-h-[580px] flex flex-col data-[state=inactive]:hidden">
-              <GmailOrganizeProvider>
-                <NewsCategoryPanel
-                  icon="📬"
-                  title="Newsletter Subscriptions"
-                  description="Pull and summarize newsletter emails from your Gmail inbox"
-                  mode="newsletter"
-                  onStatusChange={handleNewsletterStatus}
-                />
-              </GmailOrganizeProvider>
+              {gmail.status === 'active' ? (
+                <GmailOrganizeProvider>
+                  <NewsCategoryPanel
+                    icon="📬"
+                    title="Newsletter Subscriptions"
+                    description={`Pull and summarize newsletter emails from your Gmail inbox${gmail.email ? ` (${gmail.email})` : ''}`}
+                    mode="newsletter"
+                    onStatusChange={handleNewsletterStatus}
+                  />
+                </GmailOrganizeProvider>
+              ) : (
+                <GmailConnectCard />
+              )}
             </TabsContent>
           )}
         </Tabs>

@@ -6,6 +6,8 @@ import { CircleUser, LogOut, Users } from "lucide-react";
 import Link from "next/link";
 import { signOut } from "@/auth";
 import { isOwner, sessionUser } from "@/lib/user-id";
+import { gmailAccess } from "@/lib/mailboxes";
+import type { GmailState } from "@/context/account-context";
 import { AccountProvider } from "@/context/account-context";
 import { BudgetGateProvider } from "@/components/budget-gate";
 import { UsageBanner, UsageMeter } from "@/components/usage-meter";
@@ -45,6 +47,20 @@ export default async function RootLayout({
   const user = await sessionUser();
   const signedIn = !!user;
   const owner = isOwner(user);
+  let gmail: GmailState = { allowed: false, status: 'none', email: null };
+  if (user) {
+    try {
+      const g = await gmailAccess(user.id);
+      const m = g.mailbox;
+      gmail = {
+        allowed: g.allowed,
+        status: m?.status === 'active' || m?.status === 'reauth_required' ? m.status : 'none',
+        email: m && m.status !== 'disconnected' ? m.email : null,
+      };
+    } catch (e) {
+      console.error('[layout] Gmail state unavailable:', e); // the app still renders; Newsletter stays hidden
+    }
+  }
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
       <head>
@@ -57,7 +73,7 @@ export default async function RootLayout({
       <body
         className={`${dmSerifDisplay.variable} ${plusJakartaSans.variable} ${geistMono.variable} antialiased min-h-screen`}
       >
-        <AccountProvider isOwner={owner}>
+        <AccountProvider isOwner={owner} gmail={gmail}>
         <SectionProvider>
           <BudgetGateProvider>
           <nav className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-md px-5 py-3 flex items-center justify-between">
