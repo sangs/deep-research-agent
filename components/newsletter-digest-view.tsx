@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { ExternalLink, ChevronDown, AlertTriangle, FolderInput } from 'lucide-react';
-import { FolderDialog, ORGANIZE_PREFIX, SelectionBar, topicFolderName, useGmailOrganize } from '@/components/gmail-organize';
+import { FolderDialog, ORGANIZE_PREFIX, SelectionBar, TopicSelectCheckbox, topicFolderName, useGmailOrganize } from '@/components/gmail-organize';
 import { renderExcerpt } from '@/components/news-card';
 import { formatBareDate } from '@/lib/date-utils';
 import { labelLinks } from '@/lib/link-utils';
@@ -107,6 +107,12 @@ export function NewsletterDigestView({ topics, notices = [] }: NewsletterDigestV
           <div key={groupIdx} id={`nl-section-${groupIdx}`} className="space-y-1">
             {/* Section heading */}
             <div className="flex items-center gap-3 mb-3">
+              {canOrganize && (
+                <TopicSelectCheckbox
+                  topic={cluster.label}
+                  ids={cluster.articles.map((a) => a.message_id).filter((id): id is string => !!id)}
+                />
+              )}
               <span className="text-xs font-semibold text-foreground/70 uppercase tracking-wide">
                 {cluster.label}
               </span>
