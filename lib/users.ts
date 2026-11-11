@@ -9,7 +9,7 @@
 import { randomUUID } from 'crypto';
 import { and, desc, eq, gte, isNull, sql } from 'drizzle-orm';
 import { withUser, withWorker, type Tx } from '@/lib/db-access';
-import { auditLog, curatedSources, defaultSources, mailboxes, userIdentities, users, usageEvents } from '@/drizzle/schema';
+import { auditLog, curatedSources, defaultSources, userIdentities, users, usageEvents } from '@/drizzle/schema';
 import { isLegacyAllowedEmail, isOwnerBootstrapEmail } from '@/lib/auth-allowlist';
 
 export type Role = 'owner' | 'member' | 'system';
@@ -251,7 +251,8 @@ export async function listUsersForOwner(): Promise<AdminUserRow[]> {
         deletionRequestedAt: users.deletionRequestedAt,
         linked: sql<boolean>`exists (select 1 from ${userIdentities} where ${userIdentities.userId} = ${users.id})`,
         gmailEnabled: users.gmailEnabled,
-        gmailStatus: sql<string | null>`(select ${mailboxes.status} from ${mailboxes} where ${mailboxes.userId} = ${users.id})`,
+        // Explicit aliases: inside a subquery Drizzle renders columns unqualified, so users.id would bind to mailboxes.id.
+        gmailStatus: sql<string | null>`(select m.status from mailboxes m where m.user_id = "users"."id")`,
       })
       .from(users)
       .orderBy(desc(users.createdAt));

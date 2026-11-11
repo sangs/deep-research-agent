@@ -233,6 +233,126 @@ suite('per-user isolation', () => {
     });
   });
 
+  describe('Gmail mailboxes (Phase C, design 15)', () => {
+    const mb = (u: string) => `${u}-mb`;
+    beforeAll(async () => {
+      const t = Date.now();
+      for (const u of [A, B]) {
+        await admin`update users set gmail_enabled = ${u === A} where id = ${u}`;
+        await admin`insert into user_identities (provider, subject, user_id, created_at) values ('google', ${'sub-' + u}, ${u}, ${t})`;
+        await admin`insert into mailboxes (id, user_id, google_sub, email, status, connected_at)
+                    values (${mb(u)}, ${u}, ${'sub-' + u}, ${u + '@gmail.example'}, 'active', ${t})`;
+        await admin`insert into gmail_credentials (mailbox_id, token_ciphertext, token_nonce, data_key_ciphertext, kms_key_name, scopes, client_id, created_at)
+                    values (${mb(u)}, ${Buffer.from('ct-' + u)}, ${Buffer.from('nonce')}, ${Buffer.from('dk')}, 'local',
+                            ${['https://www.googleapis.com/auth/gmail.modify']}, 'client', ${t})`;
+        await admin`insert into gmail_cap_ledger (google_sub, first_granted_at) values (${'sub-' + u}, ${t})`;
+        await admin`insert into newsletter_emails (mailbox_id, message_id, sender, subject, date_header, snippet, links, summary, summary_version, created_at)
+                    values (${mb(u)}, ${'msg-' + u}, 'news@x', ${'secret subject ' + u}, 'd', 's', '{}', 'sum', 1, ${t}),
+                           (${mb(u)}, 'same-message-id', 'news@x', 's', 'd', 's', '{}', 'sum', 1, ${t})`
+          .catch(async (e) => {
+            // Until the contract migration, message_id alone is still the primary key, so the
+            // shared id can exist once only; the per-mailbox rows above still prove isolation.
+            if (!String(e.message).includes('duplicate key')) throw e;
+            await admin`insert into newsletter_emails (mailbox_id, message_id, sender, subject, date_header, snippet, links, summary, summary_version, created_at)
+                        values (${mb(u)}, ${'msg-' + u}, 'news@x', ${'secret subject ' + u}, 'd', 's', '{}', 'sum', 1, ${t})`;
+          });
+        await admin`insert into gmail_actions (id, mailbox_id, kind, actor, message_ids, added_label_ids, removed_label_ids, label_names, before, created_at)
+                    values (${u + '-act'}, ${mb(u)}, 'label', ${u}, ${['msg-' + u]}, '{}', '{}', '{}', '{}', ${t})`;
+        await admin`insert into ingest_jobs (id, mailbox_id, kind, status, message_ids, total, created_at)
+                    values (${u + '-sweep'}, ${mb(u)}, 'scheduled', 'done', '{}', 0, ${t})`;
+      }
+    });
+
+    it('withUser sees only its own mailbox, summaries, organize history and background sweeps', async () => {
+      const { withUser } = await import('@/lib/db-access');
+      const [row] = await withUser(A, (tx) =>
+        tx.execute(sql`select
+          (select array_agg(id) from mailboxes) mailboxes,
+          (select array_agg(distinct mailbox_id) from newsletter_emails) emails,
+          (select array_agg(mailbox_id) from gmail_actions) actions,
+          (select array_agg(id order by id) from ingest_jobs where kind = 'scheduled') sweeps`),
+      );
+      expect(row).toEqual({ mailboxes: [mb(A)], emails: [mb(A)], actions: [mb(A)], sweeps: [`${A}-sweep`] });
+    });
+
+    it('no user can read stored Gmail access or the cap ledger, not even their own', async () => {
+      const { withUser } = await import('@/lib/db-access');
+      for (const table of ['gmail_credentials', 'gmail_cap_ledger']) {
+        await failsWith(withUser(A, (tx) => tx.execute(sql.raw(`select count(*) from ${table}`))), /permission denied/);
+      }
+    });
+
+    it("withUser can't write into another user's mailbox", async () => {
+      const { withUser } = await import('@/lib/db-access');
+      await failsWith(
+        withUser(A, (tx) =>
+          tx.execute(sql`insert into newsletter_emails (mailbox_id, message_id, sender, subject, date_header, snippet, links, summary, summary_version, created_at)
+                         values (${mb(B)}, 'planted', 'x', 'x', 'x', 'x', '{}', 'x', 1, 1)`),
+        ),
+        /row-level security/,
+      );
+      await failsWith(
+        withUser(A, (tx) =>
+          tx.execute(sql`insert into gmail_actions (id, mailbox_id, kind, actor, message_ids, added_label_ids, removed_label_ids, label_names, before, created_at)
+                         values ('planted', ${mb(B)}, 'label', 'x', '{}', '{}', '{}', '{}', '{}', 1)`),
+        ),
+        /row-level security/,
+      );
+      await withUser(A, async (tx) => {
+        await tx.execute(sql`update mailboxes set sweep_enabled = false where id = ${mb(B)}`);
+        await tx.execute(sql`delete from newsletter_emails where mailbox_id = ${mb(B)}`);
+        await tx.execute(sql`update gmail_actions set undone_at = 1 where mailbox_id = ${mb(B)}`);
+      });
+      const [b] = await admin`select
+          (select sweep_enabled from mailboxes where id = ${mb(B)}) sweep,
+          (select count(*)::int from newsletter_emails where mailbox_id = ${mb(B)}) emails,
+          (select undone_at from gmail_actions where id = ${B + '-act'}) undone`;
+      expect(b).toEqual({ sweep: true, emails: expect.any(Number), undone: null });
+      expect(b.emails).toBeGreaterThan(0);
+    });
+
+    it('a user may only pause or resume background summarizing on their own mailbox, nothing else', async () => {
+      const { withUser } = await import('@/lib/db-access');
+      const { setSweepEnabled } = await import('@/lib/mailboxes');
+      await setSweepEnabled(A, false);
+      const [a] = await admin`select sweep_enabled from mailboxes where id = ${mb(A)}`;
+      expect(a.sweep_enabled).toBe(false);
+      await setSweepEnabled(A, true);
+      await failsWith(withUser(A, (tx) => tx.execute(sql`update mailboxes set status = 'active', email = 'x' where id = ${mb(A)}`)), /permission denied/);
+    });
+
+    it('Gmail access follows the owner switch (D2); the owner always may', async () => {
+      const { gmailAccess, gmailReady } = await import('@/lib/mailboxes');
+      const a = await gmailAccess(A);
+      expect(a).toMatchObject({ allowed: true, mailbox: { email: `${A}@gmail.example`, status: 'active' } });
+      expect(gmailReady(a)).toBe(true);
+      const b = await gmailAccess(B);
+      expect(b.allowed).toBe(false);
+      expect(gmailReady(b)).toBe(false);
+      expect((await gmailAccess(OWNER)).allowed).toBe(true);
+    });
+
+    it('the owner turns Gmail on and off per member, audited; the console counts the cap ledger', async () => {
+      const { applyOwnerAction, listUsersForOwner } = await import('@/lib/users');
+      const { gmailCapUsed } = await import('@/lib/mailboxes');
+      expect(await applyOwnerAction(OWNER, B, 'enable_gmail')).toBeNull();
+      expect((await listUsersForOwner()).find((u) => u.id === B)).toMatchObject({ gmailEnabled: true, gmailStatus: 'active' });
+      expect(await applyOwnerAction(OWNER, B, 'disable_gmail')).toBeNull();
+      const [audit] = await admin`select count(*)::int n from audit_log where target_user_id = ${B} and action in ('gmail_enabled', 'gmail_disabled')`;
+      expect(audit.n).toBe(2);
+      expect(await gmailCapUsed()).toBeGreaterThanOrEqual(2);
+    });
+
+    it("/api/news refuses Newsletter for a member without Gmail, before any backend call", async () => {
+      as(B);
+      const { POST } = await import('@/app/api/news/route');
+      const res = await POST(req('/api/news', { method: 'POST', body: JSON.stringify({ mode: 'newsletter', timezone: 'UTC' }) }));
+      const text = await res.text();
+      expect(res.status, text.slice(0, 300)).toBe(403);
+      expect(JSON.parse(text).code).toBe('not_enabled');
+    });
+  });
+
   describe('account lifecycle', () => {
     it('a new Google account becomes a pending request that can read only its own row', async () => {
       const { resolveSignIn, getUserAccess } = await import('@/lib/users');
@@ -287,6 +407,16 @@ suite('per-user isolation', () => {
       expect(entries.find((e) => e.action === 'account_deleted')?.metadata).toEqual({ grace_days: 30, requested_by: 'owner' });
       const [owner] = await admin`select count(*)::int n from users where id = ${OWNER}`;
       expect(owner.n).toBe(1);
+      // Gmail: mailbox, stored access, summaries, organize history and sweeps go with the account;
+      // the cap ledger keeps the Google account id (it counts against Google's lifetime limit).
+      const [gmail] = await admin`select
+          (select count(*)::int from mailboxes where user_id = ${A}) mailboxes,
+          (select count(*)::int from gmail_credentials where mailbox_id = ${A + '-mb'}) creds,
+          (select count(*)::int from newsletter_emails where mailbox_id = ${A + '-mb'}) emails,
+          (select count(*)::int from gmail_actions where mailbox_id = ${A + '-mb'}) actions,
+          (select count(*)::int from ingest_jobs where mailbox_id = ${A + '-mb'}) jobs,
+          (select count(*)::int from gmail_cap_ledger where google_sub = ${'sub-' + A}) ledger`;
+      expect(gmail).toEqual({ mailboxes: 0, creds: 0, emails: 0, actions: 0, jobs: 0, ledger: 1 });
     });
 
     it('a locked (deleting) account gets no data through the app', async () => {
