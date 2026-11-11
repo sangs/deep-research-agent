@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ArrowLeft, ExternalLink, Table2, BarChart3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useBudgetGate, useUsage } from '@/components/budget-gate';
+import { useAccount } from '@/context/account-context';
 import { formatResetTime, formatUsd, usageLevel, type UsageSummary } from '@/lib/usage-client';
 
 // Single data series → one hue (categorical slot 1), stepped per theme. Status colors are reserved for the budget state.
@@ -260,7 +261,9 @@ function ProviderAccounts() {
 }
 
 interface IngestStatus {
-  enabled: boolean;
+  enabled: boolean; // the owner's global switch
+  app: { mailboxes_connected: number; mailboxes_need_reconnect: number; active_jobs: number; spent_today_usd: number } | null;
+  mailbox: { email: string; sweep_enabled: boolean } | null; // the owner's own mailbox, if connected
   updated_by: string | null;
   updated_at: number | null;
   daily_cap_usd: number;
@@ -288,8 +291,14 @@ const SWEEP_STATUS: Record<string, string> = {
   capped: 'stopped at the daily cap',
 };
 
-/** Owner-only: pause/resume the scheduled newsletter sweep (backend/services/ingest.py). */
+/** Owner-only: pause/resume the scheduled newsletter sweep of every mailbox (backend/services/ingest.py).
+ *  Each user pauses their own mailbox on /account. */
 function BackgroundSummarizing() {
+  const { isOwner } = useAccount();
+  return isOwner ? <BackgroundSummarizingPanel /> : null;
+}
+
+function BackgroundSummarizingPanel() {
   const [info, setInfo] = useState<IngestStatus | null>(null);
   const [hidden, setHidden] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -328,9 +337,10 @@ function BackgroundSummarizing() {
   if (hidden || !info) return null;
   const last = info.last_sweep;
   const capPct = Math.min(100, (info.spent_today_usd / info.daily_cap_usd) * 100);
+  const app = info.app;
   return (
     <Section
-      title="Newsletter background summarizing (owner only)"
+      title="Newsletter background summarizing, all mailboxes (owner only)"
       aside={
         <Button
           size="sm"
@@ -358,14 +368,23 @@ function BackgroundSummarizing() {
         <span className="font-medium">{info.enabled ? 'On' : 'Paused'}</span>
         <span className="text-muted-foreground">
           {info.enabled
-            ? `: checks your newsletter senders for new mail ${info.schedule} and summarizes it, so digests open fast.`
-            : ': scheduled checks exit without calling Gmail or the AI model. Large Runs you start still summarize in the background.'}
+            ? `: checks each connected mailbox's newsletter senders for new mail ${info.schedule} and summarizes it, so digests open fast. Each mailbox's work is charged to its user, at most ${formatUsd(info.daily_cap_usd)} a day.`
+            : ': scheduled checks of every mailbox exit without calling Gmail or the AI model. Large Runs users start still summarize in the background.'}
           {info.updated_by && info.updated_at && ` Last changed by ${info.updated_by}, ${new Date(info.updated_at).toLocaleString()}.`}
         </span>
       </p>
+      {app && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          {app.mailboxes_connected} mailbox{app.mailboxes_connected === 1 ? '' : 'es'} connected
+          {app.mailboxes_need_reconnect > 0 && `, ${app.mailboxes_need_reconnect} waiting for their user to reconnect`}.
+          Scheduled spend today across all mailboxes: {formatUsd(app.spent_today_usd)}.
+        </p>
+      )}
       <dl className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
         <div>
-          <dt className="text-muted-foreground">Scheduled spend today (UTC)</dt>
+          <dt className="text-muted-foreground">
+            {info.mailbox ? `Your mailbox (${info.mailbox.email}): scheduled spend today (UTC)` : 'Your Gmail is not connected'}
+          </dt>
           <dd className="font-medium tabular-nums">
             {formatUsd(info.spent_today_usd)} of {formatUsd(info.daily_cap_usd)} cap
           </dd>
@@ -374,7 +393,7 @@ function BackgroundSummarizing() {
           </div>
         </div>
         <div>
-          <dt className="text-muted-foreground">Last check</dt>
+          <dt className="text-muted-foreground">Last check of your mailbox</dt>
           <dd className="font-medium">
             {!last
               ? 'None yet'

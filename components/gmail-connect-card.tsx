@@ -4,6 +4,17 @@ import Link from 'next/link';
 import { Mail, AlertCircle } from 'lucide-react';
 import { useAccount } from '@/context/account-context';
 
+/** Starts "Connect Gmail" (app/api/gmail/connect). A plain <a>: it is a full-page
+ *  navigation to an API route that redirects to Google, which <Link> would prefetch. */
+export function ConnectGmailLink({ className, children }: { className?: string; children: React.ReactNode }) {
+  return (
+    // eslint-disable-next-line @next/next/no-html-link-for-pages -- full-page redirect to Google, not an app page
+    <a href="/api/gmail/connect" className={className}>
+      {children}
+    </a>
+  );
+}
+
 /** Newsletter tab before Gmail is connected, or after Google refused the stored
  *  access (design 15 §9). Connecting is a separate consent from sign-in. */
 export function GmailConnectCard() {
@@ -41,12 +52,9 @@ export function GmailConnectCard() {
           </Link>
           .
         </p>
-        <a
-          href="/api/gmail/connect"
-          className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-        >
+        <ConnectGmailLink className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90">
           <Mail className="h-4 w-4" /> {reconnect ? 'Reconnect Gmail' : 'Connect Gmail'}
-        </a>
+        </ConnectGmailLink>
       </div>
     </div>
   );

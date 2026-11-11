@@ -5,6 +5,7 @@ import { ArrowLeft, Download } from 'lucide-react';
 import { sessionUser } from '@/lib/user-id';
 import { DELETION_GRACE_DAYS } from '@/lib/users';
 import { DeleteAccountForm } from './delete-account-form';
+import { GmailSection } from './gmail-section';
 
 export const metadata: Metadata = { title: 'Account — Research Suite' };
 
@@ -28,7 +29,12 @@ function DownloadButton() {
   );
 }
 
-export default async function AccountPage() {
+export default async function AccountPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ gmail?: string; gmail_error?: string }>;
+}) {
+  const { gmail, gmail_error } = await searchParams;
   const user = await sessionUser();
   if (!user) redirect('/');
   const isMember = user.role === 'member';
@@ -45,10 +51,12 @@ export default async function AccountPage() {
         sources are private to you; no other account, including the owner&apos;s, can read them.
       </p>
 
+      <GmailSection userId={user.id} notice={gmail} error={gmail_error} />
+
       <Section title="Export your data">
         <p className="text-sm text-muted-foreground">
           One JSON file, downloaded to this device only, with your research sessions, digests (saved and cached),
-          source lists, usage and budget raises. Nothing is sent anywhere else.
+          source lists, usage and budget raises (your email summaries are re-created from Gmail, so they aren&apos;t included). Nothing is sent anywhere else.
         </p>
         <DownloadButton />
       </Section>
@@ -69,7 +77,8 @@ export default async function AccountPage() {
                 <span className="text-foreground">
                   Everything is permanently deleted after {DELETION_GRACE_DAYS} days
                 </span>
-                : research history, digests, sources, usage and budget history. To change your mind, sign in again
+                : research history, digests, sources, usage and budget history, and your Gmail connection (access
+                at Google is removed first). To change your mind, sign in again
                 within those {DELETION_GRACE_DAYS} days and cancel.
               </li>
             </ol>

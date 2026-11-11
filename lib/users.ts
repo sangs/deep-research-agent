@@ -9,7 +9,7 @@
 import { randomUUID } from 'crypto';
 import { and, desc, eq, gte, isNull, sql } from 'drizzle-orm';
 import { withUser, withWorker, type Tx } from '@/lib/db-access';
-import { auditLog, curatedSources, defaultSources, userIdentities, users, usageEvents } from '@/drizzle/schema';
+import { auditLog, curatedSources, defaultSources, mailboxes, userIdentities, users, usageEvents } from '@/drizzle/schema';
 import { isLegacyAllowedEmail, isOwnerBootstrapEmail } from '@/lib/auth-allowlist';
 
 export type Role = 'owner' | 'member' | 'system';
@@ -55,7 +55,9 @@ export type AuditAction =
   | 'access_reactivated'
   | 'account_deletion_requested'
   | 'account_deletion_cancelled'
-  | 'account_deleted'; // written by purge_deleted_accounts() (migration 0011)
+  | 'account_deleted' // written by purge_deleted_accounts() (migration 0011)
+  | 'gmail_enabled'
+  | 'gmail_disabled'; // 'gmail_connected' / 'gmail_disconnected' are written by the backend (services/mailboxes.py)
 
 export async function audit(
   ex: Executor,
@@ -229,6 +231,8 @@ export interface AdminUserRow {
   spentTodayUsd: number; // current UTC day
   spent30dUsd: number;
   deletionDueAt: number | null; // status 'deleting': when the purge removes it
+  gmailEnabled: boolean; // owner's per-member switch (design 15, D2)
+  gmailStatus: string | null; // their mailbox: 'active' | 'reauth_required' | 'disconnected' | null (never connected)
 }
 
 export async function listUsersForOwner(): Promise<AdminUserRow[]> {
@@ -246,6 +250,8 @@ export async function listUsersForOwner(): Promise<AdminUserRow[]> {
         lastLoginAt: users.lastLoginAt,
         deletionRequestedAt: users.deletionRequestedAt,
         linked: sql<boolean>`exists (select 1 from ${userIdentities} where ${userIdentities.userId} = ${users.id})`,
+        gmailEnabled: users.gmailEnabled,
+        gmailStatus: sql<string | null>`(select ${mailboxes.status} from ${mailboxes} where ${mailboxes.userId} = ${users.id})`,
       })
       .from(users)
       .orderBy(desc(users.createdAt));
@@ -270,7 +276,9 @@ export async function listUsersForOwner(): Promise<AdminUserRow[]> {
   });
 }
 
-export type OwnerAction = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete' | 'cancel_deletion';
+export type OwnerAction =
+  | 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete' | 'cancel_deletion'
+  | 'enable_gmail' | 'disable_gmail';
 
 /** Apply an owner action to a member. Returns an error message, or null on success. */
 export async function applyOwnerAction(ownerId: string, targetId: string, action: OwnerAction): Promise<string | null> {
@@ -310,6 +318,15 @@ export async function applyOwnerAction(ownerId: string, targetId: string, action
     }
     if (action === 'cancel_deletion' && from === 'deleting') {
       await cancelDeletion(tx, targetId, ownerId);
+      return null;
+    }
+    // Gmail per member (design 15, D2). Turning it off stops all Gmail use at once
+    // (the backend checks the switch on every request and sweep); the member's
+    // connection and summaries stay until they disconnect or their account is deleted.
+    if ((action === 'enable_gmail' || action === 'disable_gmail') && from !== 'pending' && from !== 'deleting') {
+      const enable = action === 'enable_gmail';
+      await tx.update(users).set({ gmailEnabled: enable }).where(eq(users.id, targetId));
+      await audit(tx, enable ? 'gmail_enabled' : 'gmail_disabled', ownerId, targetId);
       return null;
     }
     if (action === 'reactivate' && from === 'suspended') {
