@@ -1,4 +1,6 @@
-import { pgTable, text, bigint, boolean, integer, doublePrecision, jsonb, uniqueIndex, index, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, text, bigint, boolean, integer, doublePrecision, jsonb, uniqueIndex, index, primaryKey, customType } from 'drizzle-orm/pg-core';
+
+const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
 
 // ── Identity & access (lib/users.ts; design: architecture/features/14-per-user-data-isolation-design-2026-10-27.md) ──
 // Every user's data is private to them. Access is owner-approved: an unknown
@@ -19,6 +21,9 @@ export const users = pgTable('users', {
   deletionRequestedAt: bigint('deletion_requested_at', { mode: 'number' }),
   deletionRequestedBy: text('deletion_requested_by'), // user id: the member themselves or the owner
   statusBeforeDeletion: text('status_before_deletion'), // restored if the deletion is cancelled
+  // Phase C (design 15, decision D2): the owner turns Gmail on per member (the Google
+  // project allows at most 100 users ever to grant the Gmail scope). The owner always may.
+  gmailEnabled: boolean('gmail_enabled').notNull().default(false),
 }, (table) => [
   uniqueIndex('users_email_unique').on(table.email),
   index('users_status_created_idx').on(table.status, table.createdAt),
@@ -141,6 +146,47 @@ export const rateLimitCounters = pgTable('rate_limit_counters', {
   count: integer('count').notNull(),
 }, (table) => [primaryKey({ columns: [table.userId, table.bucket, table.windowStart] })]);
 
+// ── Connected Gmail mailboxes (Phase C, design 15; backend/services/mailboxes.py) ──
+// One per user. The user sees their own row (status, pause switch); connect and
+// disconnect go through the backend, which alone holds the credentials.
+export const mailboxes = pgTable('mailboxes', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  googleSub: text('google_sub').notNull(), // the user's own Google account (decision D1)
+  email: text('email').notNull(),
+  status: text('status').notNull().default('active'), // 'active' | 'reauth_required' | 'disconnected'
+  sweepEnabled: boolean('sweep_enabled').notNull().default(true), // background summarizing for this mailbox
+  connectedAt: bigint('connected_at', { mode: 'number' }).notNull(),
+  disconnectedAt: bigint('disconnected_at', { mode: 'number' }),
+  lastSweepAt: bigint('last_sweep_at', { mode: 'number' }),
+  lastError: text('last_error'),
+  lastErrorAt: bigint('last_error_at', { mode: 'number' }),
+}, (table) => [
+  uniqueIndex('mailboxes_user_unique').on(table.userId),
+  uniqueIndex('mailboxes_google_sub_unique').on(table.googleSub),
+  index('mailboxes_status_idx').on(table.status),
+]);
+
+// The mailbox's Google refresh token, envelope-encrypted with Cloud KMS
+// (backend/services/gmail_credentials.py). Backend worker only: app_user has no grant.
+export const gmailCredentials = pgTable('gmail_credentials', {
+  mailboxId: text('mailbox_id').primaryKey().references(() => mailboxes.id, { onDelete: 'cascade' }),
+  tokenCiphertext: bytea('token_ciphertext').notNull(), // AES-256-GCM, associated data = mailbox id
+  tokenNonce: bytea('token_nonce').notNull(),
+  dataKeyCiphertext: bytea('data_key_ciphertext').notNull(), // the data key, encrypted by KMS
+  kmsKeyName: text('kms_key_name').notNull(), // key (version) that encrypted the data key
+  scopes: text('scopes').array().notNull(),
+  clientId: text('client_id').notNull(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+});
+
+// Every Google account that ever granted the Gmail scope through the app: the
+// lifetime cap of 100 (design 15 §8). Not tied to users, so it outlives deletions.
+export const gmailCapLedger = pgTable('gmail_cap_ledger', {
+  googleSub: text('google_sub').primaryKey(),
+  firstGrantedAt: bigint('first_granted_at', { mode: 'number' }).notNull(),
+});
+
 // ── Gmail organize audit log (backend/services/gmail_organizer.py) ──────────
 // One row per user-initiated label/move/organize. `before` holds each
 // message's label ids before the change, so the action can be undone exactly.
@@ -157,7 +203,11 @@ export const gmailActions = pgTable('gmail_actions', {
   createdAt: bigint('created_at', { mode: 'number' }).notNull(),
   undoneAt: bigint('undone_at', { mode: 'number' }),
   undoneBy: text('undone_by'),
-}, (table) => [index('gmail_actions_created_idx').on(table.createdAt)]);
+  mailboxId: text('mailbox_id').references(() => mailboxes.id, { onDelete: 'cascade' }), // Phase C; required after 0013
+}, (table) => [
+  index('gmail_actions_created_idx').on(table.createdAt),
+  index('gmail_actions_mailbox_created_idx').on(table.mailboxId, table.createdAt),
+]);
 
 // ── Newsletter per-email store (backend/services/newsletter_store.py) ──────
 // Scale-out Phase 1 (architecture/features/13-newsletter-scale-out-plan-2026-10-20.md):
@@ -175,7 +225,13 @@ export const newsletterEmails = pgTable('newsletter_emails', {
   summary: text('summary').notNull(),
   summaryVersion: integer('summary_version').notNull(), // SUMMARY_VERSION in gmail_service.py; older rows are re-summarized
   createdAt: bigint('created_at', { mode: 'number' }).notNull(), // epoch ms; retention purge uses this
-}, (table) => [index('newsletter_emails_created_idx').on(table.createdAt)]);
+  // Phase C: message ids are unique per mailbox only. Nullable until the owner's
+  // existing rows are re-pointed; 0013 makes (mailbox_id, message_id) the key.
+  mailboxId: text('mailbox_id').references(() => mailboxes.id, { onDelete: 'cascade' }),
+}, (table) => [
+  index('newsletter_emails_created_idx').on(table.createdAt),
+  uniqueIndex('newsletter_emails_mailbox_message_unique').on(table.mailboxId, table.messageId),
+]);
 
 // ── Newsletter ingest jobs (backend/services/ingest.py, jobs/ingest.py) ─────
 // Scale-out Phase 2: summarizing runs outside the request path. A digest run
@@ -198,8 +254,10 @@ export const ingestJobs = pgTable('ingest_jobs', {
   createdAt: bigint('created_at', { mode: 'number' }).notNull(), // epoch ms
   startedAt: bigint('started_at', { mode: 'number' }),
   finishedAt: bigint('finished_at', { mode: 'number' }),
+  mailboxId: text('mailbox_id').references(() => mailboxes.id, { onDelete: 'cascade' }), // Phase C; required after 0013
 }, (table) => [
   index('ingest_jobs_status_created_idx').on(table.status, table.createdAt),
+  index('ingest_jobs_mailbox_kind_created_idx').on(table.mailboxId, table.kind, table.createdAt),
   index('ingest_jobs_kind_created_idx').on(table.kind, table.createdAt),
 ]);
 

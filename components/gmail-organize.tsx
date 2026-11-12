@@ -6,7 +6,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { FolderInput, History, Loader2, Tag, Undo2, Wand2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, FolderInput, History, Loader2, Tag, Undo2, Wand2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -42,6 +42,8 @@ interface GmailOrganize {
   labels: GmailLabel[];
   selected: Set<string>;
   toggle: (messageId: string) => void;
+  /** Select (on) or unselect (off) many at once, e.g. a whole topic. */
+  setMany: (messageIds: string[], on: boolean) => void;
   clearSelection: () => void;
   apply: (kind: 'move' | 'label' | 'organize', groups: LabelGroup[], move: boolean) => Promise<boolean>;
   openActivity: () => void;
@@ -115,6 +117,15 @@ export function GmailOrganizeProvider({ children }: { children: React.ReactNode 
           const next = new Set(prev);
           if (next.has(id)) next.delete(id);
           else next.add(id);
+          return next;
+        }),
+      setMany: (ids, on) =>
+        setSelected((prev) => {
+          const next = new Set(prev);
+          for (const id of ids) {
+            if (on) next.add(id);
+            else next.delete(id);
+          }
           return next;
         }),
       clearSelection: () => setSelected(new Set()),
@@ -203,13 +214,54 @@ export function FolderDialog({
 
 // ── Organize inbox (digest-wide) ─────────────────────────────────────────────
 
-function groupsFromTopics(topics: TopicCluster[], prefix: string): LabelGroup[] {
+interface TopicChoice {
+  topic: string;
+  label: string; // folder name
+  emails: { id: string; title: string; source: string }[];
+}
+
+function topicChoices(topics: TopicCluster[], prefix: string): TopicChoice[] {
   return topics
     .map((t) => ({
+      topic: t.label,
       label: topicFolderName(prefix, t.label),
-      message_ids: t.articles.map((a) => a.message_id).filter((id): id is string => !!id),
+      emails: t.articles
+        .filter((a) => !!a.message_id)
+        .map((a) => ({ id: a.message_id!, title: a.title, source: a.source })),
     }))
-    .filter((g) => g.message_ids.length > 0);
+    .filter((t) => t.emails.length > 0);
+}
+
+/** Checkbox that can show "some selected" (indeterminate). */
+function TriCheckbox({ checked, mixed, onChange, label }: { checked: boolean; mixed: boolean; onChange: (on: boolean) => void; label: string }) {
+  return (
+    <input
+      type="checkbox"
+      aria-label={label}
+      checked={checked}
+      ref={(el) => {
+        if (el) el.indeterminate = mixed;
+      }}
+      onChange={(e) => onChange(e.target.checked)}
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
+}
+
+/** Topic heading checkbox in the digest: selects every email of the topic (including
+ *  ones behind "Show more"); individual emails can then be unticked. */
+export function TopicSelectCheckbox({ ids, topic }: { ids: string[]; topic: string }) {
+  const org = useGmailOrganize();
+  if (!org?.available || ids.length === 0) return null;
+  const n = ids.filter((id) => org.selected.has(id)).length;
+  return (
+    <TriCheckbox
+      checked={n === ids.length}
+      mixed={n > 0 && n < ids.length}
+      onChange={(on) => org.setMany(ids, on)}
+      label={`Select all ${ids.length} emails in "${topic}"`}
+    />
+  );
 }
 
 export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
@@ -218,17 +270,47 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
   const [prefix, setPrefix] = useState(ORGANIZE_PREFIX);
   const [move, setMove] = useState(false);
   const [busy, setBusy] = useState(false);
-  const groups = useMemo(() => groupsFromTopics(topics, prefix), [topics, prefix]);
+  // Emails left out (everything is included by default); topics expanded to show their emails.
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const choices = useMemo(() => topicChoices(topics, prefix), [topics, prefix]);
+  const groups: LabelGroup[] = useMemo(
+    () =>
+      choices
+        .map((c) => ({ label: c.label, message_ids: c.emails.map((e) => e.id).filter((id) => !excluded.has(id)) }))
+        .filter((g) => g.message_ids.length > 0),
+    [choices, excluded],
+  );
   if (!org?.available) return null;
+  const available = choices.reduce((n, c) => n + c.emails.length, 0);
   const total = groups.reduce((n, g) => n + g.message_ids.length, 0);
-  const disabled = total === 0;
+
+  const setIncluded = (ids: string[], on: boolean) =>
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (on) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  const toggleExpanded = (topic: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(topic)) next.delete(topic);
+      else next.add(topic);
+      return next;
+    });
 
   async function applyAll() {
-    if (!org) return;
+    if (!org || groups.length === 0) return;
     setBusy(true);
     const ok = await org.apply('organize', groups, move);
     setBusy(false);
-    if (ok) setOpen(false);
+    if (ok) {
+      setOpen(false);
+      setExcluded(new Set());
+    }
   }
 
   return (
@@ -238,8 +320,8 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
         variant="outline"
         className="h-7 text-xs gap-1"
         onClick={() => setOpen(true)}
-        disabled={disabled}
-        title={disabled ? 'Re-run this digest to organize it (older saved digests don’t include email IDs)' : 'Label every email by its topic'}
+        disabled={available === 0}
+        title={available === 0 ? 'Re-run this digest to organize it (older saved digests don’t include email IDs)' : 'Label emails by their topic'}
       >
         <Wand2 className="h-3 w-3" /> Organize inbox…
       </Button>
@@ -248,7 +330,9 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
           <DialogHeader>
             <DialogTitle>Organize inbox by topic</DialogTitle>
             <DialogDescription>
-              Will label {total} email{total === 1 ? '' : 's'} into {groups.length} folder{groups.length === 1 ? '' : 's'}. Nothing is deleted, and you can undo the whole step.
+              Choose the topics, and within a topic the emails, to file. Each topic goes into its own folder. Will label{' '}
+              {total} email{total === 1 ? '' : 's'} into {groups.length} folder{groups.length === 1 ? '' : 's'}. Nothing is
+              deleted, and you can undo the whole step.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -256,13 +340,69 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
               <span className="text-muted-foreground shrink-0">Folder prefix</span>
               <Input value={prefix} onChange={(e) => setPrefix(e.target.value)} className="h-8" aria-label="Folder prefix" />
             </label>
-            <ul className="max-h-60 overflow-y-auto rounded-md border border-border/60 divide-y divide-border/40 text-sm">
-              {groups.map((g) => (
-                <li key={g.label} className="flex justify-between gap-3 px-3 py-1.5">
-                  <span className="truncate">{g.label}</span>
-                  <span className="tabular-nums text-muted-foreground shrink-0">{g.message_ids.length}</span>
-                </li>
-              ))}
+            <div className="flex gap-3 text-xs">
+              <button type="button" className="text-primary hover:underline" onClick={() => setExcluded(new Set())}>
+                Select all
+              </button>
+              <button
+                type="button"
+                className="text-primary hover:underline"
+                onClick={() => setExcluded(new Set(choices.flatMap((c) => c.emails.map((e) => e.id))))}
+              >
+                Select none
+              </button>
+            </div>
+            <ul className="max-h-72 overflow-y-auto rounded-md border border-border/60 divide-y divide-border/40 text-sm">
+              {choices.map((c) => {
+                const ids = c.emails.map((e) => e.id);
+                const n = ids.filter((id) => !excluded.has(id)).length;
+                const isOpen = expanded.has(c.topic);
+                return (
+                  <li key={c.topic}>
+                    <div className="flex items-center gap-2 px-3 py-1.5">
+                      <TriCheckbox
+                        checked={n === ids.length}
+                        mixed={n > 0 && n < ids.length}
+                        onChange={(on) => setIncluded(ids, on)}
+                        label={`Include topic "${c.topic}"`}
+                      />
+                      <button
+                        type="button"
+                        className="flex flex-1 min-w-0 items-center gap-1 text-left"
+                        onClick={() => toggleExpanded(c.topic)}
+                        aria-expanded={isOpen}
+                        title="Show the emails in this topic"
+                      >
+                        {isOpen ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
+                        <span className="truncate">{c.label}</span>
+                      </button>
+                      <span className="tabular-nums text-muted-foreground shrink-0">
+                        {n === ids.length ? ids.length : `${n} of ${ids.length}`}
+                      </span>
+                    </div>
+                    {isOpen && (
+                      <ul className="pb-1.5 pl-9 pr-3 space-y-1">
+                        {c.emails.map((e) => (
+                          <li key={e.id}>
+                            <label className="flex items-start gap-2 text-xs">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={!excluded.has(e.id)}
+                                onChange={(ev) => setIncluded([e.id], ev.target.checked)}
+                              />
+                              <span className="min-w-0">
+                                <span className="line-clamp-1">{e.title}</span>
+                                <span className="text-muted-foreground">{e.source}</span>
+                              </span>
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
             <label className="flex items-start gap-2 text-sm">
               <input type="checkbox" className="mt-0.5" checked={move} onChange={(e) => setMove(e.target.checked)} />
@@ -271,9 +411,9 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={applyAll} disabled={busy || disabled}>
+            <Button onClick={applyAll} disabled={busy || total === 0}>
               {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {move ? 'Organize & move' : 'Apply labels'}
+              {move ? `Organize & move ${total}` : `Apply labels to ${total}`}
             </Button>
           </DialogFooter>
         </DialogContent>

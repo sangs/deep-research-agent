@@ -6,7 +6,8 @@ The pool logs in as `app_login`, which has no table access of its own
 - user_conn(user_id): a transaction as `app_user` with app.user_id set, so row
   security limits every query to that user's rows.
 - worker_conn(reason): a transaction as `app_worker` for work that isn't one
-  user's: the newsletter mailbox (owner-only until Phase C), the MCP default
+  user's: background newsletter work across mailboxes, Gmail connect/disconnect and the
+  encrypted credentials (Phase C), the MCP default
   source list, retention. That role cannot read research, digests or sources.
 
 Both settings are transaction-local (safe with the Supabase transaction pooler).
@@ -21,7 +22,7 @@ import asyncpg
 
 _pool: asyncpg.Pool | None = None
 
-WorkerReason = Literal['newsletter', 'mcp_defaults', 'retention']
+WorkerReason = Literal['newsletter', 'gmail', 'mcp_defaults', 'retention']
 
 
 async def get_pool() -> asyncpg.Pool:

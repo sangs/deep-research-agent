@@ -14,6 +14,8 @@ Safety model (see documents/architecture/features/12-gmail-organize-design-2026-
   4. Every user-initiated change is recorded in Supabase gmail_actions with each
      message's labels *before* the change, so undo_action() can restore exactly
      the labels that action touched. Nothing ever leaves All Mail.
+  5. Phase C: each action belongs to one mailbox and is read/written as that
+     mailbox's user (row security), so a user can only see or undo their own.
 """
 
 import asyncio
@@ -21,7 +23,8 @@ import json
 import time
 import uuid
 
-from services.db import worker_conn
+from services.db import user_conn
+from services.mailboxes import Mailbox
 
 FORBIDDEN_LABELS = frozenset({'TRASH', 'SPAM'})
 SYSTEM_LABELS_ALLOWED = frozenset({'INBOX'})
@@ -118,19 +121,19 @@ def _restore_plan(before: dict[str, list[str]], now: dict[str, list[str]], touch
 
 # ── Audited, async operations (called by the HTTP endpoints) ─────────────────
 
-async def _record(kind: str, actor: str, message_ids: list[str], add_ids: list[str], remove_ids: list[str],
+async def _record(mailbox: Mailbox, kind: str, actor: str, message_ids: list[str], add_ids: list[str], remove_ids: list[str],
                   label_names: list[str], before: dict[str, list[str]]) -> str:
     action_id = str(uuid.uuid4())
-    async with worker_conn('newsletter') as conn:
+    async with user_conn(mailbox.user_id) as conn:
         await conn.execute(
-            "INSERT INTO gmail_actions (id, kind, actor, message_ids, added_label_ids, removed_label_ids, label_names, before, created_at) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)",
-            action_id, kind, actor, message_ids, add_ids, remove_ids, label_names, json.dumps(before), int(time.time() * 1000),
+            "INSERT INTO gmail_actions (id, mailbox_id, kind, actor, message_ids, added_label_ids, removed_label_ids, label_names, before, created_at) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)",
+            action_id, mailbox.id, kind, actor, message_ids, add_ids, remove_ids, label_names, json.dumps(before), int(time.time() * 1000),
         )
     return action_id
 
 
-async def apply_groups(service, kind: str, actor: str, groups: list[dict], move: bool, confirm_bulk: bool = False) -> dict:
+async def apply_groups(service, mailbox: Mailbox, kind: str, actor: str, groups: list[dict], move: bool, confirm_bulk: bool = False) -> dict:
     """groups: [{'label': 'AI-Digest/Agents', 'message_ids': [...]}]. Labels each group (creating labels as
     needed); with move=True also removes INBOX. One audited action covering every group."""
     all_ids = sorted({mid for g in groups for mid in g['message_ids']})
@@ -140,13 +143,13 @@ async def apply_groups(service, kind: str, actor: str, groups: list[dict], move:
     before = await asyncio.to_thread(_labels_of, service, all_ids)
     for group, label_id in zip(groups, label_ids):
         await asyncio.to_thread(_batch_modify, service, group['message_ids'], [label_id], remove)
-    action_id = await _record(kind, actor, all_ids, label_ids, remove, [g['label'] for g in groups], before)
+    action_id = await _record(mailbox, kind, actor, all_ids, label_ids, remove, [g['label'] for g in groups], before)
     return {'action_id': action_id, 'messages': len(all_ids), 'labels': [g['label'] for g in groups], 'moved': move}
 
 
-async def undo_action(service, action_id: str, actor: str) -> dict:
-    async with worker_conn('newsletter') as conn:
-        row = await conn.fetchrow("SELECT * FROM gmail_actions WHERE id = $1", action_id)
+async def undo_action(service, mailbox: Mailbox, action_id: str, actor: str) -> dict:
+    async with user_conn(mailbox.user_id) as conn:
+        row = await conn.fetchrow("SELECT * FROM gmail_actions WHERE id = $1 AND mailbox_id = $2", action_id, mailbox.id)
     if row is None:
         raise GmailGuardError('Unknown action')
     if row['undone_at'] is not None:
@@ -158,20 +161,20 @@ async def undo_action(service, action_id: str, actor: str) -> dict:
     for (add, remove), message_ids in plan.items():
         validate_change(list(add), list(remove), len(message_ids), confirm_bulk=True)
         await asyncio.to_thread(_batch_modify, service, message_ids, list(add), list(remove))
-    async with worker_conn('newsletter') as conn:
+    async with user_conn(mailbox.user_id) as conn:
         await conn.execute(
-            "UPDATE gmail_actions SET undone_at = $2, undone_by = $3 WHERE id = $1",
-            action_id, int(time.time() * 1000), actor,
+            "UPDATE gmail_actions SET undone_at = $3, undone_by = $4 WHERE id = $1 AND mailbox_id = $2",
+            action_id, mailbox.id, int(time.time() * 1000), actor,
         )
     return {'action_id': action_id, 'restored_messages': sum(len(v) for v in plan.values())}
 
 
-async def list_actions(limit: int = 20) -> list[dict]:
-    async with worker_conn('newsletter') as conn:
+async def list_actions(mailbox: Mailbox, limit: int = 20) -> list[dict]:
+    async with user_conn(mailbox.user_id) as conn:
         rows = await conn.fetch(
             "SELECT id, kind, actor, cardinality(message_ids) AS messages, label_names, removed_label_ids, created_at, undone_at, undone_by "
-            "FROM gmail_actions ORDER BY created_at DESC LIMIT $1",
-            limit,
+            "FROM gmail_actions WHERE mailbox_id = $1 ORDER BY created_at DESC LIMIT $2",
+            mailbox.id, limit,
         )
     return [
         {

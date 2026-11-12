@@ -24,9 +24,25 @@ interface AdminUser {
   spentTodayUsd: number;
   spent30dUsd: number;
   deletionDueAt: number | null;
+  gmailEnabled: boolean;
+  gmailStatus: 'active' | 'reauth_required' | 'disconnected' | null;
 }
 
-type Action = 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete' | 'cancel_deletion';
+interface GmailCap {
+  used: number;
+  limit: number;
+  guard: number;
+}
+
+type Action =
+  | 'approve' | 'reject' | 'suspend' | 'reactivate' | 'delete' | 'cancel_deletion'
+  | 'enable_gmail' | 'disable_gmail';
+
+const GMAIL_LABEL: Record<string, string> = {
+  active: 'connected',
+  reauth_required: 'needs reconnecting',
+  disconnected: 'disconnected',
+};
 
 const STATUS_STYLE: Record<AdminUser['status'], string> = {
   pending: 'bg-[#fab219]/15 text-foreground border-[#fab219]/40',
@@ -54,12 +70,14 @@ export default function AdminPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [gmailCap, setGmailCap] = useState<GmailCap | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch('/api/admin/users', { cache: 'no-store' });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) return setError(body.error ?? `Could not load users (HTTP ${res.status})`);
     setUsers(body.users);
+    setGmailCap(body.gmailCap ?? null);
   }, []);
 
   useEffect(() => {
@@ -81,6 +99,7 @@ export default function AdminPage() {
         return false;
       }
       setUsers(body.users);
+      setGmailCap(body.gmailCap ?? null);
       return true;
     } finally {
       setBusy(null);
@@ -108,6 +127,30 @@ export default function AdminPage() {
         <p role="alert" className="rounded-md border border-[#d03b3b]/40 bg-[#d03b3b]/10 px-3 py-2 text-sm">
           {error}
         </p>
+      )}
+
+      {gmailCap && (
+        <Section title="Gmail connections">
+          <p className="text-sm">
+            <span className="font-medium tabular-nums">
+              {gmailCap.used} of {gmailCap.limit}
+            </span>{' '}
+            <span className="text-muted-foreground">
+              used (lifetime). Google lets at most {gmailCap.limit} accounts ever connect Gmail to this unverified app;
+              disconnecting doesn&apos;t give a slot back. New connections stop at {gmailCap.guard}, keeping a reserve.
+            </span>
+          </p>
+          <div className="mt-2 h-1.5 w-full max-w-56 rounded-full bg-muted overflow-hidden">
+            <div
+              className={`h-full ${gmailCap.used >= gmailCap.guard ? 'bg-[#d03b3b]' : 'bg-primary'}`}
+              style={{ width: `${Math.min(100, (gmailCap.used / gmailCap.limit) * 100)}%` }}
+            />
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Turn Gmail on per member below (only for people who need the Newsletter tab). Turning it off stops their Gmail
+            use at once; their connection stays until they disconnect it.
+          </p>
+        </Section>
       )}
 
       <Section title="Pre-approve an email">
@@ -174,6 +217,7 @@ export default function AdminPage() {
                 <tr className="text-left text-muted-foreground border-b border-border/60">
                   <th className="py-2 pr-3 font-medium">Account</th>
                   <th className="py-2 pr-3 font-medium">Status</th>
+                  <th className="py-2 pr-3 font-medium">Gmail</th>
                   <th className="py-2 pr-3 font-medium">Last sign-in</th>
                   <th className="py-2 pr-3 font-medium text-right">Today (UTC)</th>
                   <th className="py-2 pr-3 font-medium text-right">30 days</th>
@@ -194,6 +238,30 @@ export default function AdminPage() {
                         <Badge variant="outline" className={STATUS_STYLE[u.status]}>
                           {u.status}
                         </Badge>
+                      )}
+                    </td>
+                    <td className="py-2.5 pr-3">
+                      {u.role === 'system' ? null : (
+                        <div className="flex flex-col items-start gap-1">
+                          <span className="text-xs text-muted-foreground">
+                            {u.role === 'owner' || u.gmailEnabled
+                              ? u.gmailStatus
+                                ? GMAIL_LABEL[u.gmailStatus]
+                                : 'on, not connected'
+                              : 'off'}
+                          </span>
+                          {u.role === 'member' && (u.status === 'active' || u.status === 'suspended') && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs"
+                              onClick={() => act(u, u.gmailEnabled ? 'disable_gmail' : 'enable_gmail')}
+                              disabled={!!busy || (!u.gmailEnabled && !!gmailCap && gmailCap.used >= gmailCap.guard && !u.gmailStatus)}
+                            >
+                              {u.gmailEnabled ? 'Turn Gmail off' : 'Turn Gmail on'}
+                            </Button>
+                          )}
+                        </div>
                       )}
                     </td>
                     <td className="py-2.5 pr-3 text-muted-foreground">{when(u.lastLoginAt)}</td>

@@ -26,8 +26,8 @@ interface SourceManagerProps {
 }
 
 export function SourceManager({ open, onClose }: SourceManagerProps) {
-  // Newsletter is owner-only (the only mailbox is the owner's), so its sender list is too.
-  const { isOwner: showNewsletter } = useAccount();
+  // Newsletter senders: for users who may use Gmail (design 15).
+  const showNewsletter = useAccount().gmail.allowed;
   const [domains, setDomains] = useState<string[]>([]);
   const [researchDomains, setResearchDomains] = useState<string[]>([]);
   const [newsletterDomains, setNewsletterDomains] = useState<string[]>([]);

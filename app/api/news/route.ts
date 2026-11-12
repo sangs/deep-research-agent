@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { BACKEND_URL, backendAuthHeaders } from '@/lib/backend-auth';
-import { isOwner, sessionUser } from '@/lib/user-id';
+import { sessionUser } from '@/lib/user-id';
+import { gmailAccess, gmailReady } from '@/lib/mailboxes';
 import { guardRun, recordUsage, type UsageItem } from '@/lib/usage';
 import { userAssertionHeaders } from '@/lib/user-assertion';
 
@@ -74,10 +75,19 @@ export async function POST(req: Request): Promise<Response> {
   const body = await req.json();
   const tz: string = body.timezone ?? 'UTC';
   const feature = body.mode === 'newsletter' ? 'newsletter' : 'news';
-  // The only connected mailbox is the owner's until each user connects their
-  // own Gmail (design 14, Phase C).
-  if (feature === 'newsletter' && !isOwner(user)) {
-    return Response.json({ error: 'Newsletter is not available for your account yet' }, { status: 403 });
+  // Newsletter reads the user's own connected Gmail (Phase C, design 15).
+  if (feature === 'newsletter') {
+    const gmail = await gmailAccess(userId);
+    if (!gmail.allowed) {
+      return Response.json({ error: 'Gmail is not turned on for your account. Ask the owner.', code: 'not_enabled' }, { status: 403 });
+    }
+    if (!gmailReady(gmail)) {
+      const code = gmail.mailbox?.status === 'reauth_required' ? 'reauth_required' : 'not_connected';
+      return Response.json(
+        { error: code === 'reauth_required' ? 'Reconnect Gmail on the Account page.' : 'Connect your Gmail first.', code },
+        { status: 409 },
+      );
+    }
   }
   const blocked = await guardRun(userId, tz, feature);
   if (blocked) return blocked;

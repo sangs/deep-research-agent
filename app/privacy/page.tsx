@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   title: 'Privacy Policy — Research Suite',
 };
 
-const UPDATED = '2026-11-09';
+const UPDATED = '2026-11-10';
 const CONTACT = process.env.NEXT_PUBLIC_PRIVACY_CONTACT ?? 'the app owner';
 
 export default function PrivacyPage() {
@@ -34,10 +34,13 @@ export default function PrivacyPage() {
             check that it is approved, and keep you signed in (a session cookie).
           </li>
           <li>
-            <strong>Gmail (the owner&apos;s inbox only):</strong> with the owner&apos;s permission (scope <code>gmail.modify</code>), the
-            app reads newsletter emails from senders the owner configured, to build newsletter digests. It adds the label
-            &ldquo;gmail-ai-digested&rdquo; to emails it has included, and labels or moves emails into folders only when the owner asks
-            and can undo it. It never deletes, trashes or sends email.
+            <strong>Gmail (only if you connect it):</strong> if you choose &ldquo;Connect Gmail&rdquo; (scope{' '}
+            <code>gmail.modify</code>), the app reads newsletter emails from the senders you configure, to build your digests,
+            and labels or moves emails into folders only when you ask (you can undo it). It adds the label
+            &ldquo;gmail-ai-digested&rdquo; to emails it has included. It never deletes, trashes or sends email. Your Gmail access
+            is stored encrypted and used only for your own account; no other user, including the owner, can see your email or
+            digests. You can disconnect at any time on the Account page or at myaccount.google.com/permissions; disconnecting
+            deletes the stored access and your email summaries.
           </li>
           <li>
             <strong>What you type:</strong> research and news questions, and the results generated for them.
@@ -55,7 +58,8 @@ export default function PrivacyPage() {
           <li>
             <strong>Storage:</strong> email summaries (sender, subject, date, preview, links, summary), saved digests, research
             sessions, your source lists and usage costs are stored in a Supabase (PostgreSQL) database, each tied to your
-            account and never shown to other users. The app runs on Vercel and Google Cloud;
+            account and never shown to other users. Your Gmail access is encrypted with a key held in Google Cloud Key
+            Management Service that only the app&apos;s backend can use. The app runs on Vercel and Google Cloud; its own
             credentials are kept in Google Cloud Secret Manager.
           </li>
           <li>Data is not sold, not used for advertising, and not shared with anyone else.</li>
@@ -74,8 +78,8 @@ export default function PrivacyPage() {
           >
             Google API Services User Data Policy
           </a>
-          , including the Limited Use requirements. Gmail data is used only to provide the app&apos;s digest and organizing
-          features to the owner.
+          , including the Limited Use requirements. Gmail data is not used for advertising, not sold, not used to train AI
+          models, and is read by people only with your permission, for security, or to comply with the law.
         </p>
       </section>
 
@@ -83,17 +87,22 @@ export default function PrivacyPage() {
         <h2 className="text-base font-semibold">How long data is kept</h2>
         <ul className="list-disc pl-5 space-y-1">
           <li>Per-email summaries: deleted 90 days after they are made.</li>
-          <li>News results: reused for 1 hour, kept until removed. Saved newsletter digests: until the owner removes them.</li>
+          <li>News results: reused for 1 hour, kept until removed. Saved newsletter digests: until you remove them or delete your account (disconnecting Gmail keeps them).</li>
           <li>Research sessions: until deleted from the History drawer.</li>
           <li>Your account and everything tied to it: until you or the owner delete the account (see below).</li>
           <li>
             Security log (sign-ins and access changes): 1 year. Entries about a deleted account keep only an internal id,
             not your email address.
           </li>
+          <li>
+            If you connect Gmail: your Google account id (a number, without your email address) is kept to count against
+            Google&apos;s limit on how many accounts may ever connect Gmail to this app, including after disconnecting or
+            deleting your account.
+          </li>
           <li>Server request logs (Vercel, Google Cloud): up to 30 days; they may include your email address.</li>
         </ul>
         <p>
-          The owner can withdraw the app&apos;s Gmail access at any time at{' '}
+          You can withdraw the app&apos;s Gmail access at any time on the Account page or at{' '}
           <a className="underline underline-offset-2" href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">
             myaccount.google.com/permissions
           </a>
