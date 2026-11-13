@@ -11,6 +11,8 @@ export interface NewsDigest {
   topics: TopicCluster[];
   /** User-visible warnings from the backend (e.g. topic grouping fell back to by-source, per-run limit hit). */
   notices?: string[];
+  /** Newsletter: how many senders were searched (set when no emails matched). */
+  sender_count?: number | null;
 }
 
 interface NewsDashboardProps {

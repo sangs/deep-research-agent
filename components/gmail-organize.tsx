@@ -6,7 +6,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { ChevronDown, ChevronRight, FolderInput, History, Loader2, Tag, Undo2, Wand2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, FolderInput, History, Loader2, RotateCcw, Tag, Undo2, Wand2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -14,6 +14,8 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import type { TopicCluster } from '@/components/topic-group';
 
 export const ORGANIZE_PREFIX = 'AI-Digest';
+/** Same limit as the backend's validate_label_name. */
+const MAX_FOLDER_NAME = 200;
 
 interface GmailLabel { id: string; name: string }
 interface GmailAction {
@@ -273,17 +275,31 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
   // Emails left out (everything is included by default); topics expanded to show their emails.
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Folder names the user typed, by topic. Topics without an entry use prefix/topic,
+  // so changing the prefix still updates them.
+  const [customNames, setCustomNames] = useState<Map<string, string>>(new Map());
   const choices = useMemo(() => topicChoices(topics, prefix), [topics, prefix]);
+  const folderFor = useCallback((c: TopicChoice) => customNames.get(c.topic) ?? c.label, [customNames]);
   const groups: LabelGroup[] = useMemo(
     () =>
       choices
-        .map((c) => ({ label: c.label, message_ids: c.emails.map((e) => e.id).filter((id) => !excluded.has(id)) }))
+        .map((c) => ({ label: folderFor(c).trim(), message_ids: c.emails.map((e) => e.id).filter((id) => !excluded.has(id)) }))
         .filter((g) => g.message_ids.length > 0),
-    [choices, excluded],
+    [choices, excluded, folderFor],
   );
   if (!org?.available) return null;
   const available = choices.reduce((n, c) => n + c.emails.length, 0);
   const total = groups.reduce((n, g) => n + g.message_ids.length, 0);
+  const folderCount = new Set(groups.map((g) => g.label.toLowerCase())).size;
+  const invalidName = groups.some((g) => !g.label || g.label.length > MAX_FOLDER_NAME);
+
+  const setCustomName = (topic: string, name: string | null) =>
+    setCustomNames((prev) => {
+      const next = new Map(prev);
+      if (name === null) next.delete(topic);
+      else next.set(topic, name);
+      return next;
+    });
 
   const setIncluded = (ids: string[], on: boolean) =>
     setExcluded((prev) => {
@@ -303,13 +319,14 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
     });
 
   async function applyAll() {
-    if (!org || groups.length === 0) return;
+    if (!org || groups.length === 0 || invalidName) return;
     setBusy(true);
     const ok = await org.apply('organize', groups, move);
     setBusy(false);
     if (ok) {
       setOpen(false);
       setExcluded(new Set());
+      setCustomNames(new Map());
     }
   }
 
@@ -330,9 +347,10 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
           <DialogHeader>
             <DialogTitle>Organize inbox by topic</DialogTitle>
             <DialogDescription>
-              Choose the topics, and within a topic the emails, to file. Each topic goes into its own folder. Will label{' '}
-              {total} email{total === 1 ? '' : 's'} into {groups.length} folder{groups.length === 1 ? '' : 's'}. Nothing is
-              deleted, and you can undo the whole step.
+              Choose the topics, and within a topic the emails, to file. Each topic goes into its own folder; click a
+              folder name to rename it (topics given the same name share a folder). Will label {total} email
+              {total === 1 ? '' : 's'} into {folderCount} folder{folderCount === 1 ? '' : 's'}. Nothing is deleted, and
+              you can undo the whole step.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -357,6 +375,9 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
                 const ids = c.emails.map((e) => e.id);
                 const n = ids.filter((id) => !excluded.has(id)).length;
                 const isOpen = expanded.has(c.topic);
+                const folder = folderFor(c);
+                const renamed = customNames.has(c.topic);
+                const badName = n > 0 && (!folder.trim() || folder.trim().length > MAX_FOLDER_NAME);
                 return (
                   <li key={c.topic}>
                     <div className="flex items-center gap-2 px-3 py-1.5">
@@ -368,18 +389,41 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
                       />
                       <button
                         type="button"
-                        className="flex flex-1 min-w-0 items-center gap-1 text-left"
+                        className="shrink-0 text-muted-foreground hover:text-foreground"
                         onClick={() => toggleExpanded(c.topic)}
                         aria-expanded={isOpen}
+                        aria-label={`${isOpen ? 'Hide' : 'Show'} the emails in "${c.topic}"`}
                         title="Show the emails in this topic"
                       >
-                        {isOpen ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
-                        <span className="truncate">{c.label}</span>
+                        {isOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                       </button>
+                      <Input
+                        value={folder}
+                        onChange={(e) => setCustomName(c.topic, e.target.value)}
+                        maxLength={MAX_FOLDER_NAME}
+                        aria-label={`Folder name for topic "${c.topic}"`}
+                        aria-invalid={badName || undefined}
+                        title={renamed ? `Renamed from ${c.label}` : 'Click to rename this folder'}
+                        className={`h-7 flex-1 min-w-0 border-transparent bg-transparent px-1.5 shadow-none hover:border-border focus-visible:border-border ${
+                          badName ? 'border-destructive' : ''
+                        }`}
+                      />
+                      {renamed && (
+                        <button
+                          type="button"
+                          className="shrink-0 text-muted-foreground hover:text-foreground"
+                          onClick={() => setCustomName(c.topic, null)}
+                          aria-label={`Reset folder name to ${c.label}`}
+                          title={`Reset to ${c.label}`}
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                        </button>
+                      )}
                       <span className="tabular-nums text-muted-foreground shrink-0">
                         {n === ids.length ? ids.length : `${n} of ${ids.length}`}
                       </span>
                     </div>
+                    {badName && <p className="px-9 pb-1 text-xs text-destructive">Enter a folder name.</p>}
                     {isOpen && (
                       <ul className="pb-1.5 pl-9 pr-3 space-y-1">
                         {c.emails.map((e) => (
@@ -411,7 +455,7 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={applyAll} disabled={busy || total === 0}>
+            <Button onClick={applyAll} disabled={busy || total === 0 || invalidName}>
               {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {move ? `Organize & move ${total}` : `Apply labels to ${total}`}
             </Button>

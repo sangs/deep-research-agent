@@ -114,6 +114,23 @@ interface NewsCategoryPanelProps {
   onStatusChange?: (status: string, count: number) => void;
   /** @deprecated no longer used */
   placeholder?: React.ReactNode;
+  /** Opens Manage Sources (offered when the Newsletter finds no emails). */
+  onManageSources?: () => void;
+}
+
+/** Empty Newsletter result: names how many senders were searched when the backend says. */
+function newsletterEmptyMessage(
+  senderCount: number | null | undefined,
+  senderFilter: boolean,
+  subjectFilter: boolean,
+): string {
+  const hint = senderFilter || subjectFilter
+    ? 'Try a wider date range or remove the sender/subject filter.'
+    : 'Try a wider date range or add senders.';
+  if (typeof senderCount !== 'number') return `No emails found. ${hint}`;
+  const senders = senderCount === 1 ? 'sender' : 'senders';
+  const whose = senderFilter ? `the ${senderCount} ${senders} in your filter` : `your ${senderCount} ${senders}`;
+  return `No emails from ${whose} in this range. ${hint}`;
 }
 
 export function NewsCategoryPanel({
@@ -123,6 +140,7 @@ export function NewsCategoryPanel({
   mode,
   placeholder,
   onStatusChange,
+  onManageSources,
 }: NewsCategoryPanelProps) {
   const { events, digest, thread, status, errorMsg, fromCache, ingest, run, stop, restore, reset } = useNewsStream();
   const { ensureBudget } = useBudgetGate();
@@ -849,9 +867,14 @@ export function NewsCategoryPanel({
                         : mode === 'research'
                         ? 'No research articles found. Try a broader query or check your Research Sites sources.'
                         : mode === 'newsletter'
-                        ? 'No emails found. Try a wider date range or remove the sender/subject filter.'
+                        ? newsletterEmptyMessage(latestRun.digest.sender_count, Boolean(nlSenders.trim()), Boolean(nlSubjectKw.trim()))
                         : 'No articles found for this query and time range.'}
                     </p>
+                    {mode === 'newsletter' && onManageSources && (
+                      <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={onManageSources}>
+                        Manage Sources
+                      </Button>
+                    )}
                   </div>
                 ) : mode === 'newsletter' ? (
                   <NewsletterDigestView
