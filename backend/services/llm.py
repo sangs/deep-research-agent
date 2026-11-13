@@ -32,10 +32,34 @@ class ProviderCreditError(RuntimeError):
     """OpenRouter refused the call for lack of credits (HTTP 402)."""
 
 
+class EmptyReplyError(ValueError):
+    """The model returned no text (content null/empty), e.g. it spent max_tokens thinking."""
+
+
+def reply_text(data: dict) -> str:
+    """The assistant text of a Chat Completions reply.
+
+    `message.content` can be null: on 2026-11-13 the `~google/gemini-flash-latest`
+    alias had moved to a newer model whose thinking used up the 450-token summary
+    budget, so `.get('content', '').strip()` raised AttributeError on None and every
+    newsletter summary fell back to Gmail's preview text. Raises EmptyReplyError
+    (with finish_reason and the routed model) instead of returning nothing.
+    """
+    choice = (data.get('choices') or [{}])[0]
+    text = ((choice.get('message') or {}).get('content') or '').strip()
+    if not text:
+        raise EmptyReplyError(
+            f"empty reply (finish_reason={choice.get('finish_reason')}, model={data.get('model')})"
+        )
+    return text
+
+
 def describe_llm_error(exc: Exception) -> str:
     """Short, user-facing reason for a failed LLM call."""
     if isinstance(exc, ProviderCreditError):
         return str(exc)
+    if isinstance(exc, EmptyReplyError):
+        return 'the AI model returned no text'
     if isinstance(exc, httpx.TimeoutException):
         return 'the AI model took too long to respond'
     if isinstance(exc, httpx.HTTPStatusError):

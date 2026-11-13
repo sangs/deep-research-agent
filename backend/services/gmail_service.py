@@ -55,7 +55,7 @@ from dotenv import load_dotenv
 from models.schemas import NewsDigest, TopicCluster, ArticleItem
 from tools.date_utils import resolve_date_range, format_header_date, format_range_label, now_iso
 from tools.news_tools import load_sources
-from services.llm import chat_completion, describe_llm_error
+from services.llm import chat_completion, describe_llm_error, reply_text
 from services.gmail_organizer import ensure_label, add_label
 from services import ingest, mailboxes, newsletter_store
 from services.mailboxes import Mailbox, MailboxError
@@ -591,7 +591,7 @@ Rules:
                 'model': MODEL,
                 'messages': [{'role': 'user', 'content': prompt}],
             })
-            content = data['choices'][0]['message'].get('content', '{}')
+            content = reply_text(data)
 
         match = re.search(r'\{[\s\S]*\}', content)
         raw = match.group(0) if match else '{}'
@@ -749,15 +749,20 @@ async def _summarize_via_openrouter(
             f'Content:\n{body_preview}'
         )
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 data = await chat_completion(client, {
                     'model': MODEL,
-                    'max_tokens': 450,
+                    # Thinking counts against max_tokens. 2026-11-13: even minimal effort
+                    # thought ~280 tokens on a summary, so 450 left too little room
+                    # (finish_reason=length, content null → every summary failed).
+                    'max_tokens': 1200,
+                    'reasoning': {'effort': 'minimal'},
                     'messages': [{'role': 'user', 'content': prompt}],
                 })
-                summary = data['choices'][0]['message'].get('content', '').strip()
-                return idx, summary or None  # empty reply: not stored, retried next run
+                return idx, reply_text(data)
         except Exception as exc:
+            # Failed emails aren't stored, so they're retried next run.
+            print(f'[newsletter] summary failed for email {idx} ({type(exc).__name__}: {exc})')
             failures.append(describe_llm_error(exc))
             return idx, None
 
@@ -949,7 +954,8 @@ async def run_gmail_digest(
         })
 
     if not ids:
-        return empty_digest
+        # Lets the UI say "no emails from your N senders in this range".
+        return empty_digest.model_copy(update={'sender_count': len(effective_senders)})
 
     notices: list[str] = []
     if truncated:

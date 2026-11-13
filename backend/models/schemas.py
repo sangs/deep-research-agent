@@ -25,3 +25,4 @@ class NewsDigest(BaseModel):
     generated_at: str     # ISO timestamp
     topics: list[TopicCluster]
     notices: list[str] = []  # user-visible warnings, e.g. topic grouping fell back to by-source
+    sender_count: Optional[int] = None  # newsletter: senders searched (set when no emails matched)

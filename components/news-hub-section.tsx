@@ -162,6 +162,7 @@ export function NewsHubSection() {
                     description={`Pull and summarize newsletter emails from your Gmail inbox${gmail.email ? ` (${gmail.email})` : ''}`}
                     mode="newsletter"
                     onStatusChange={handleNewsletterStatus}
+                    onManageSources={() => setSourceManagerOpen(true)}
                   />
                 </GmailOrganizeProvider>
               ) : (
