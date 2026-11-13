@@ -290,7 +290,8 @@ export function OrganizeInboxButton({ topics }: { topics: TopicCluster[] }) {
   if (!org?.available) return null;
   const available = choices.reduce((n, c) => n + c.emails.length, 0);
   const total = groups.reduce((n, g) => n + g.message_ids.length, 0);
-  const folderCount = new Set(groups.map((g) => g.label.toLowerCase())).size;
+  // Blank names aren't folders (Apply stays disabled until they're filled in).
+  const folderCount = new Set(groups.filter((g) => g.label).map((g) => g.label.toLowerCase())).size;
   const invalidName = groups.some((g) => !g.label || g.label.length > MAX_FOLDER_NAME);
 
   const setCustomName = (topic: string, name: string | null) =>
