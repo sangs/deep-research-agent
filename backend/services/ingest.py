@@ -223,7 +223,7 @@ async def _spent_today(user_id: str, day: str) -> float:
         ))
 
 
-async def _app_spent_today() -> float:
+async def app_spent_today() -> float:
     """All users since UTC midnight (the same window as lib/usage.ts appBudgetAvailable)."""
     async with worker_conn('newsletter') as conn:
         return float(await conn.fetchval(
@@ -307,7 +307,7 @@ async def _sweep_all(service_for) -> None:
         await conn.execute('DELETE FROM ingest_jobs WHERE created_at < $1',
                            _now_ms() - JOB_RETENTION_DAYS * 86400 * 1000)
     for mailbox in await mailboxes.sweepable():
-        if await _app_spent_today() >= APP_DAILY_BUDGET_USD:
+        if await app_spent_today() >= APP_DAILY_BUDGET_USD:
             print(f'[ingest] sweep stopped: app-wide daily cap ${APP_DAILY_BUDGET_USD} reached')
             break
         try:
