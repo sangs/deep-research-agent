@@ -28,6 +28,10 @@ class FinopsPushTests(unittest.TestCase):
         start = window_start(datetime(2026, 11, 16, 15, 30, tzinfo=timezone.utc))
         self.assertEqual(start, datetime(2026, 11, 16 - (PUSH_WINDOW_DAYS - 1), tzinfo=timezone.utc))
 
+    def test_backfill_window(self):
+        start = window_start(datetime(2026, 11, 16, 15, 30, tzinfo=timezone.utc), 60)
+        self.assertEqual(start, datetime(2026, 9, 18, tzinfo=timezone.utc))
+
     def test_merge_request_shape(self):
         body = merge_request('proj', to_rows([('2026-11-16', 'openrouter', 'm', 0.5)]), '2026-11-10', 'run-1')
         self.assertIn('`proj.finops_landing.gmail_digest`', body['query'])

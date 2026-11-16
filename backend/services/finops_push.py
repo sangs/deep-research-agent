@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from services.db import worker_conn
 
 PUSH_WINDOW_DAYS = 7                     # days re-sent on every push (UTC); covers late events and outages
+MAX_BACKFILL_DAYS = 400                  # one-off backfill limit (python -m jobs.ingest --finops-backfill-days=N)
 LANDING_TABLE = 'finops_landing.gmail_digest'
 MAX_BYTES_BILLED = 100 * 1024 ** 2       # the landing table is a few KB
 PROVIDER_NAMES = {'openrouter': 'OpenRouter', 'exa': 'Exa'}
@@ -37,9 +38,9 @@ WHEN NOT MATCHED BY SOURCE AND t.usage_date >= @since THEN DELETE
 """
 
 
-def window_start(now: datetime) -> datetime:
-    """UTC midnight PUSH_WINDOW_DAYS - 1 days ago (the window includes today)."""
-    day = now.astimezone(timezone.utc).date() - timedelta(days=PUSH_WINDOW_DAYS - 1)
+def window_start(now: datetime, days: int = PUSH_WINDOW_DAYS) -> datetime:
+    """UTC midnight days - 1 days ago (the window includes today)."""
+    day = now.astimezone(timezone.utc).date() - timedelta(days=days - 1)
     return datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
 
 
@@ -91,21 +92,24 @@ def _run_merge(project: str, body: dict) -> dict:
     return result
 
 
-async def push_costs() -> None:
-    """One push. Never raises: cost reporting must not break ingest."""
+async def push_costs(days: int = PUSH_WINDOW_DAYS) -> None:
+    """One push of the trailing `days` (UTC). Never raises: cost reporting must not break ingest.
+    A larger `days` is a backfill: same MERGE, so it only replaces days inside the window."""
     project = os.environ.get('FINOPS_PROJECT')
     if not project:
         print('[finops] push skipped: FINOPS_PROJECT not set')
         return
     started = time.monotonic()
     try:
-        since = window_start(datetime.now(timezone.utc))
+        if not 1 <= days <= MAX_BACKFILL_DAYS:
+            raise ValueError(f'days must be 1..{MAX_BACKFILL_DAYS}, got {days}')
+        since = window_start(datetime.now(timezone.utc), days)
         rows = to_rows(await _daily_totals(since))
         run_id = f'gmail-digest-{uuid.uuid4().hex[:12]}'
         result = await asyncio.to_thread(_run_merge, project,
                                          merge_request(project, rows, since.date().isoformat(), run_id))
         total = sum(float(r['cost_usd']) for r in rows)
-        print(f"[finops] pushed {len(rows)} rows (${total:.4f}, {PUSH_WINDOW_DAYS} days) run={run_id} "
+        print(f"[finops] pushed {len(rows)} rows (${total:.4f}, {days} days) run={run_id} "
               f"changed={result.get('numDmlAffectedRows')} in {time.monotonic() - started:.1f}s")
     except Exception as exc:
         print(f'[finops] push failed ({type(exc).__name__}: {exc})')
