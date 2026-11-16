@@ -4,13 +4,14 @@ import { useMemo, useState } from 'react';
 import { formatUsd } from '@/lib/usage-client';
 import type { FinopsSummary } from '@/lib/finops-types';
 
-// Daily cost, stacked by provider. Colors follow the provider (never its rank) and were validated for the dark
-// card surface (dataviz validate_palette.js: CVD ΔE 9.4, normal 26.5, all >= 3:1). A provider beyond these
-// three folds into "Other" (muted), never a generated hue.
+// Daily cost, stacked by provider. Colors follow the provider (never its rank); light and dark steps live in
+// app/globals.css (--finops-*), validated with the dataviz validate_palette.js against each card surface
+// (dark: CVD ΔE 9.4, all >= 3:1; light: CVD ΔE 9.2, Exa 2.8:1, so the legend and table view carry identity).
+// A provider beyond these three folds into "Other" (muted), never a generated hue.
 export const PROVIDER_COLOR: Record<string, string> = {
-  'Google Cloud': '#3987e5',
-  OpenRouter: '#d95926',
-  Exa: '#199e70',
+  'Google Cloud': 'var(--finops-google-cloud)',
+  OpenRouter: 'var(--finops-openrouter)',
+  Exa: 'var(--finops-exa)',
 };
 const OTHER = 'Other';
 const OTHER_COLOR = 'var(--muted-foreground)';
@@ -100,7 +101,7 @@ export function FinopsDailyChart({ daily }: { daily: FinopsSummary['daily'] }) {
         {active && (
           <div
             role="tooltip"
-            className="pointer-events-none absolute -top-2 rounded-md border border-border bg-popover px-3 py-2 text-xs shadow-md"
+            className="pointer-events-none absolute -top-2 whitespace-nowrap rounded-md border border-border bg-popover px-3 py-2 text-xs shadow-md"
             style={{
               left: `${((days.indexOf(active) + 0.5) / days.length) * 100}%`,
               transform: `translate(${days.indexOf(active) > days.length / 2 ? '-100%' : '0'}, -100%)`,
