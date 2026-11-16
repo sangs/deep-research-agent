@@ -52,6 +52,10 @@
 :root {
   --radius: 0.5rem;
   --background: oklch(0.98 0.004 255);
+  /* /finops chart: provider colors (dataviz palette slots 1-3, validated per mode) */
+  --finops-google-cloud: #2a78d6;
+  --finops-openrouter: #eb6834;
+  --finops-exa: #1baf7a;
   --foreground: oklch(0.13 0.014 255);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.13 0.014 255);
@@ -87,6 +91,9 @@
 /* ── Dark — Deep Night Intelligence (default active via html.dark) ── */
 .dark {
   --background:         oklch(0.12 0.014 255);
+  --finops-google-cloud: #3987e5;
+  --finops-openrouter: #d95926;
+  --finops-exa: #199e70;
   --foreground:         oklch(0.93 0.008 255);
   --card:               oklch(0.165 0.014 255);
   --card-foreground:    oklch(0.93 0.008 255);
