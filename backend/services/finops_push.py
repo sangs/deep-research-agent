@@ -83,12 +83,14 @@ async def _daily_totals(since: datetime) -> list:
         )
 
 
-def _run_merge(project: str, body: dict) -> dict:
-    from googleapiclient.discovery import build  # sync client; called via asyncio.to_thread
+def bq_query(project: str, body: dict) -> dict:
+    """One BigQuery jobs.query call as this service's identity (sync: call via asyncio.to_thread).
+    Shared by the push and services/finops_summary.py."""
+    from googleapiclient.discovery import build
     bq = build('bigquery', 'v2', cache_discovery=False)
     result = bq.jobs().query(projectId=project, body=body).execute()
     if not result.get('jobComplete'):
-        raise RuntimeError(f"MERGE did not finish in time (job {result.get('jobReference', {}).get('jobId')})")
+        raise RuntimeError(f"query did not finish in time (job {result.get('jobReference', {}).get('jobId')})")
     return result
 
 
@@ -106,7 +108,7 @@ async def push_costs(days: int = PUSH_WINDOW_DAYS) -> None:
         since = window_start(datetime.now(timezone.utc), days)
         rows = to_rows(await _daily_totals(since))
         run_id = f'gmail-digest-{uuid.uuid4().hex[:12]}'
-        result = await asyncio.to_thread(_run_merge, project,
+        result = await asyncio.to_thread(bq_query, project,
                                          merge_request(project, rows, since.date().isoformat(), run_id))
         total = sum(float(r['cost_usd']) for r in rows)
         print(f"[finops] pushed {len(rows)} rows (${total:.4f}, {days} days) run={run_id} "

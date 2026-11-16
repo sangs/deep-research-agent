@@ -293,6 +293,19 @@ async def ingest_settings_endpoint(request: Request, user: AssertedUser) -> Resp
     return await ingest_status_endpoint(request)
 
 
+@requires_user()
+async def finops_summary_endpoint(request: Request, user: AssertedUser) -> Response:
+    """GET /finops/summary[?refresh=1] — owner only; anyone else gets 404 (design 16 §4A)."""
+    from services import finops_summary
+    if not user.is_owner:
+        return JSONResponse({'error': 'Not found'}, status_code=404)
+    try:
+        data = await finops_summary.summary(refresh=request.query_params.get('refresh') == '1')
+    except finops_summary.FinopsUnavailable as e:
+        return JSONResponse({'error': str(e)}, status_code=503)
+    return JSONResponse(data, headers={'Cache-Control': 'private, no-store'})
+
+
 @requires_user(owner_only=True)
 async def ingest_run_endpoint(request: Request, user: AssertedUser) -> Response:
     """POST — start a sweep of every mailbox now instead of waiting for the next slot."""
@@ -322,6 +335,7 @@ def create_app():
         Route('/ingest/status', endpoint=ingest_status_endpoint, methods=['GET']),
         Route('/ingest/settings', endpoint=ingest_settings_endpoint, methods=['POST']),
         Route('/ingest/run', endpoint=ingest_run_endpoint, methods=['POST']),
+        Route('/finops/summary', endpoint=finops_summary_endpoint, methods=['GET']),
     ]
 
     # The MCP sub-app's lifespan starts its session manager (task group);
