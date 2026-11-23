@@ -69,13 +69,18 @@ export async function audit(
   await ex.insert(auditLog).values({ id: randomUUID(), action, actorUserId, targetUserId, metadata, createdAt: Date.now() });
 }
 
-/** Give a newly active user their own copy of the default source lists. Idempotent. */
+/** Give a newly active user their own copy of the standard source lists (Global,
+ *  Blogs & Sites, Research), which they then edit. Newsletter senders are personal,
+ *  so that list starts empty. Idempotent.
+ *  ON CONFLICT must not name columns: that needs SELECT on curated_sources, which
+ *  app_worker doesn't have (it must not read anyone's sources). */
 async function seedSources(ex: Executor, userId: string) {
   await ex.execute(sql`
     INSERT INTO ${curatedSources} (id, user_id, domain, list_type, added_at)
     SELECT gen_random_uuid()::text, ${userId}, d.domain, d.list_type, ${Date.now()}
     FROM ${defaultSources} d
-    ON CONFLICT (user_id, domain, list_type) DO NOTHING`);
+    WHERE d.list_type <> 'newsletters'
+    ON CONFLICT DO NOTHING`);
 }
 
 // ── Access lookups (cached briefly: called by proxy.ts on every request) ────
@@ -287,7 +292,7 @@ export async function applyOwnerAction(ownerId: string, targetId: string, action
   const now = Date.now();
   const result = await withWorker('owner_console', async (tx) => {
     const [target] = await tx
-      .select({ status: users.status, role: users.role })
+      .select({ status: users.status, role: users.role, approvedAt: users.approvedAt })
       .from(users)
       .where(eq(users.id, targetId))
       .limit(1);
@@ -331,8 +336,14 @@ export async function applyOwnerAction(ownerId: string, targetId: string, action
       return null;
     }
     if (action === 'reactivate' && from === 'suspended') {
-      await tx.update(users).set({ status: 'active' }).where(eq(users.id, targetId));
-      await seedSources(tx, targetId); // no-op unless they never had sources (e.g. legacy placeholder)
+      // Never approved (legacy placeholder): they have no lists yet. Anyone else keeps
+      // theirs as edited; seeding again would bring back sources they removed.
+      const firstTime = target.approvedAt === null;
+      await tx
+        .update(users)
+        .set({ status: 'active', ...(firstTime && { approvedAt: now, approvedBy: ownerId }) })
+        .where(eq(users.id, targetId));
+      if (firstTime) await seedSources(tx, targetId);
       await audit(tx, 'access_reactivated', ownerId, targetId);
       return null;
     }

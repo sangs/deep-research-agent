@@ -364,6 +364,66 @@ suite('per-user isolation', () => {
       await admin`delete from users where id = ${result.userId}`;
     });
 
+    it.each(['approve', 'preapprove', 'preapprove a pending request', 'allowlist'] as const)(
+      '%s gives the user the standard source lists and an empty Newsletter list',
+      async (path) => {
+        const { applyOwnerAction, preapproveEmail, resolveSignIn } = await import('@/lib/users');
+        const email = `${path.replace(/ /g, '-')}@example.com`;
+        if (path === 'allowlist') {
+          vi.stubEnv('AUTH_ALLOWED_EMAILS', email);
+          vi.stubEnv('AUTH_OWNER_EMAILS', 'owner@example.com'); // or this sign-in claims the unclaimed owner row
+        }
+        try {
+          if (path !== 'preapprove') expect((await resolveSignIn(`sub-${path}`, email, null)).ok).toBe(true);
+          const [pending] = await admin`select id from users where email = ${email}`;
+          if (path === 'approve') expect(await applyOwnerAction(OWNER, pending.id, 'approve')).toBeNull();
+          if (path.startsWith('preapprove')) expect(await preapproveEmail(OWNER, email)).toBeNull();
+          const [user] = await admin`select id, status from users where email = ${email}`;
+          expect(user.status).toBe('active');
+          const got = await admin`select list_type, domain from curated_sources where user_id = ${user.id} order by 1, 2`;
+          const want = await admin`select list_type, domain from default_sources where list_type <> 'newsletters' order by 1, 2`;
+          expect(want.length).toBeGreaterThan(0);
+          expect([...got]).toEqual([...want]);
+        } finally {
+          vi.unstubAllEnvs();
+          await admin`delete from users where email = ${email}`;
+        }
+      },
+    );
+
+    it('reactivating keeps a member\'s edited lists; a legacy account that was never approved gets the standard ones', async () => {
+      const { applyOwnerAction } = await import('@/lib/users');
+      const before = await admin`select domain, list_type from curated_sources where user_id = ${A} order by 1, 2`;
+      expect(await applyOwnerAction(OWNER, A, 'suspend')).toBeNull();
+      expect(await applyOwnerAction(OWNER, A, 'reactivate')).toBeNull();
+      expect([...(await admin`select domain, list_type from curated_sources where user_id = ${A} order by 1, 2`)]).toEqual([...before]);
+
+      await admin`insert into users (id, email, role, status, created_at) values ('legacy', 'legacy@example.com', 'member', 'suspended', 1)`;
+      expect(await applyOwnerAction(OWNER, 'legacy', 'reactivate')).toBeNull();
+      const [n] = await admin`select (select count(*)::int from curated_sources where user_id = 'legacy') got,
+                                     (select count(*)::int from default_sources where list_type <> 'newsletters') want`;
+      expect(n.got).toBe(n.want);
+      await admin`delete from users where id = 'legacy'`;
+    });
+
+    it('a new member can remove and add standard sources', async () => {
+      const { preapproveEmail } = await import('@/lib/users');
+      expect(await preapproveEmail(OWNER, 'editor@example.com')).toBeNull();
+      const [user] = await admin`select id from users where email = 'editor@example.com'`;
+      as(user.id);
+      const { POST } = await import('@/app/api/sources/route');
+      const post = (action: string, domain: string, list_type: string) =>
+        POST(req('/api/sources', { method: 'POST', body: JSON.stringify({ action, domains: [domain], list_type }) }));
+      expect((await (await post('remove', 'bbc.com', 'global_news_sites')).json()).removed).toEqual(['bbc.com']);
+      expect((await (await post('add', 'mine.example', 'newsletters')).json()).added).toEqual(['mine.example']);
+      await admin`delete from users where id = ${user.id}`;
+    });
+
+    it('the worker role can add sources but never read them', async () => {
+      const { withWorker } = await import('@/lib/db-access');
+      await failsWith(withWorker('owner_console', (tx) => tx.execute(sql`select domain from curated_sources`)), /permission denied/);
+    });
+
     it('owner delete is scheduled: the account is locked at once, data kept, and the owner can cancel', async () => {
       const { applyOwnerAction, getUserAccess } = await import('@/lib/users');
       expect(await applyOwnerAction(OWNER, A, 'delete')).toBeNull();
