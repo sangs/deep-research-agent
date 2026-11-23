@@ -35,12 +35,20 @@ export async function POST(req: Request) {
   if (!user) return NextResponse.json({ error: 'Owner only' }, { status: 403 });
   const body = await req.json().catch(() => ({}));
   let error: string | null;
-  if (body.action === 'preapprove' && typeof body.email === 'string') {
-    error = await preapproveEmail(user.id, body.email);
-  } else if (ACTIONS.has(body.action) && typeof body.userId === 'string') {
-    error = await applyOwnerAction(user.id, body.userId, body.action);
-  } else {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  try {
+    if (body.action === 'preapprove' && typeof body.email === 'string') {
+      error = await preapproveEmail(user.id, body.email);
+    } else if (ACTIONS.has(body.action) && typeof body.userId === 'string') {
+      error = await applyOwnerAction(user.id, body.userId, body.action);
+    } else {
+      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+    }
+  } catch (e) {
+    console.error(`[admin] ${body.action} failed`, e);
+    return NextResponse.json(
+      { error: 'The change could not be saved because of a server error. Reload the page and try again.' },
+      { status: 500 },
+    );
   }
   if (error) return NextResponse.json({ error }, { status: 400 });
   return NextResponse.json(await listing());

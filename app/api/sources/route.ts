@@ -6,7 +6,7 @@ import { withUser } from '@/lib/db-access';
 import { sessionUserId } from '@/lib/user-id';
 
 // Each user's own source lists (seeded from default_sources when their account
-// became active). Queries run as that user, so row security keeps them to their own rows.
+// became active, except newsletters, which start empty). Queries run as that user, so row security keeps them to their own rows.
 
 const LIST_TYPES = ['news_sites', 'research_sites', 'newsletters', 'global_news_sites'] as const;
 

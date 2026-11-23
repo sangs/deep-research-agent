@@ -543,7 +543,7 @@ export function SourceManager({ open, onClose }: SourceManagerProps) {
                   ))}
                   {newsletterDomains.length === 0 && !loading && (
                     <p className="text-xs text-muted-foreground text-center py-4">
-                      No senders configured — Newsletter tab will fetch all emails in the date range.
+                      No senders yet. Add the newsletters you subscribe to; the Newsletter tab only reads emails from these senders.
                     </p>
                   )}
                 </div>

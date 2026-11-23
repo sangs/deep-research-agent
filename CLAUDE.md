@@ -120,7 +120,7 @@ Digest cache + saved digests: /api/history/news[/list] → Supabase news_digests
 ```
 components/source-manager.tsx
   → GET/POST /api/sources  (Next.js route, Drizzle directly; scoped to the signed-in user)
-    → Supabase curated_sources (one copy per user, seeded from default_sources on activation)
+    → Supabase curated_sources (one copy per user; seeded from default_sources on activation, except newsletters, which start empty)
 backend: tools/news_tools.load_sources(user_id) — the requesting user's lists; no user (MCP) → default_sources
 ```
 
